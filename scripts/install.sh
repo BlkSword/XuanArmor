@@ -484,7 +484,6 @@ fragment_policy = "rate_limit"
 persist_link = true
 # pinned link 所在 bpffs；安装脚本会创建并挂载 /run/eshield-bpf
 pin_path = "/run/eshield-bpf"
-pin_path = "/sys/fs/bpf"
 
 [rate_limit]
 enabled = true
