@@ -97,7 +97,7 @@ fragment_policy = "rate_limit"
 # 需要显式卸载时执行 `eshield detach`；设为 false 则恢复「退出即卸载」的旧行为。
 persist_link = true
 # pinned link 所在 bpffs 目录（默认 /sys/fs/bpf；容器内需挂载 bpffs）
-pin_path = "/sys/fs/bpf"
+pin_path = "/run/eshield-bpf"   # 安装脚本自动挂载；也可用已挂载的 /sys/fs/bpf
 
 # ── 启动资源预检 ─────────────────────────────────────────────────────
 

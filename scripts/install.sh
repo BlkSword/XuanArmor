@@ -482,6 +482,8 @@ mode = "auto"
 fragment_policy = "rate_limit"
 # 平滑升级（v0.5.1）：退出时保留 XDP 挂载（fail-closed），升级/重启期间防护不中断
 persist_link = true
+# pinned link 所在 bpffs；安装脚本会创建并挂载 /run/eshield-bpf
+pin_path = "/run/eshield-bpf"
 pin_path = "/sys/fs/bpf"
 
 [rate_limit]
