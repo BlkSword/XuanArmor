@@ -1,5 +1,5 @@
 # XuanArmor 配置文件示例（v0.5.0）
-# 安装后通常位于 /etc/eshield/config.toml
+# 安装后通常位于 /etc/xuanarmor/config.toml
 #
 # 注意：TOML 中表头（[xxx]）之后的所有键值都属于该表，直到下一个表头。
 # 因此顶层配置项（interface / log_level / whitelist / api_token ...）必须写在所有
@@ -31,12 +31,12 @@ tcp_reset_on_drop = false
 # Web 控制台监听地址，默认 0.0.0.0:8720。
 # 安全提示：控制台/API 默认是明文 HTTP + Bearer Token；对外提供服务时必须放在
 # nginx/Caddy 等 TLS 反向代理之后，否则 token 会被明文嗅探（进程启动会告警）。
-# 若已由反代终结 TLS，设置环境变量 ESHIELD_ASSUME_TLS_PROXY=1 可关闭告警。
+# 若已由反代终结 TLS，设置环境变量 XUANARMOR_ASSUME_TLS_PROXY=1 可关闭告警。
 web_bind = "0.0.0.0:8720"
 
 # API 访问 Token。
 # 未设置时进程启动会生成随机 Token（日志只打印前缀），外部请求仍必须携带 Bearer Token；
-# 本机 127.0.0.1/::1 的 CLI/TUI 请求免校验。可用 `eshield reset-token` 生成新 Token。
+# 本机 127.0.0.1/::1 的 CLI/TUI 请求免校验。可用 `xuanarmor reset-token` 生成新 Token。
 # api_token = "changeme"
 
 # 只读 Token（v0.5.0，可选）。使用该 Token 的请求只允许 GET/HEAD/OPTIONS，
@@ -46,7 +46,7 @@ web_bind = "0.0.0.0:8720"
 # readonly_token = "readonly-changeme"
 
 # 动态规则持久化路径（redb）
-store_path = "/var/lib/eshield/rules.redb"
+store_path = "/var/lib/xuanarmor/rules.redb"
 
 # eBPF map 条目数采样周期（秒，默认 30；/metrics 与 /api/map-usage 只读该缓存，不做实时遍历）
 metrics_interval_s = 30
@@ -55,7 +55,7 @@ metrics_interval_s = 30
 timeseries_retention_days = 30
 
 # 告警 Webhook 配置（可选）
-# alert_webhook_url = "https://hooks.example.com/eshield"
+# alert_webhook_url = "https://hooks.example.com/xuanarmor"
 # 告警通道类型：generic / slack / dingtalk / wecom
 alert_webhook_type = "generic"
 alert_threshold_dps = 1000
@@ -92,12 +92,12 @@ auto_reattach = true        # 每 15s 校验挂载状态，被摘掉时自动重
 # 注意：rate_limit 依赖 [port_rate_limit].enabled = true；若关闭端口聚合限速，分片等同 pass。
 fragment_policy = "rate_limit"
 
-# 平滑升级（v0.5.1）：进程退出时不摘除 XDP 程序（fail-closed），旧程序继续过滤，
+# 平滑升级（v0.6.0）：进程退出时不摘除 XDP 程序（fail-closed），旧程序继续过滤，
 # 新进程启动时由内核原子替换，升级期间数据面不中断。
-# 需要显式卸载时执行 `eshield detach`；设为 false 则恢复「退出即卸载」的旧行为。
+# 需要显式卸载时执行 `xuanarmor detach`；设为 false 则恢复「退出即卸载」的旧行为。
 persist_link = true
 # pinned link 所在 bpffs 目录（默认 /sys/fs/bpf；容器内需挂载 bpffs）
-pin_path = "/run/eshield-bpf"   # 安装脚本自动挂载；也可用已挂载的 /sys/fs/bpf
+pin_path = "/run/xuanarmor-bpf"   # 安装脚本自动挂载；也可用已挂载的 /sys/fs/bpf
 
 # ── 启动资源预检 ─────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ pin_path = "/run/eshield-bpf"   # 安装脚本自动挂载；也可用已挂载�
 # 内存构成：eBPF map 约 75–82MB（按容量预分配）+ 进程 RSS 约 48MB + 业务进程。
 [limits]
 min_memory_mb = 512         # 低于该值：启动时打印告警（建议 >= 1GB）
-refuse_memory_mb = 256      # 低于该值：直接拒绝启动；可临时用 ESHIELD_ALLOW_LOW_MEMORY=1 强制启动（不推荐）
+refuse_memory_mb = 256      # 低于该值：直接拒绝启动；可临时用 XUANARMOR_ALLOW_LOW_MEMORY=1 强制启动（不推荐）
 
 # ── 审计 ─────────────────────────────────────────────────────────────
 
@@ -115,7 +115,7 @@ refuse_memory_mb = 256      # 低于该值：直接拒绝启动；可临时用 E
 # 进程重启后自动从文件尾部恢复链。超过 max_size_mb 轮转为 audit.log.1~.3。
 [audit]
 enabled = false
-path = "/var/log/eshield/audit.log"
+path = "/var/log/xuanarmor/audit.log"
 max_size_mb = 100
 
 # ── 速率限制 ─────────────────────────────────────────────────────────
@@ -181,8 +181,8 @@ block_duration_s = 300
 [geoip]
 enabled = false
 # db_path = "/usr/share/GeoIP/GeoLite2-Country.mmdb"   # 预留：当前仅支持 CSV，MMDB 尚未接入
-country_blocks_csv = "/etc/eshield/geoip_country.csv"   # 自定义国家 CSV
-# asn_blocks_csv = "/etc/eshield/geoip_asn.csv"         # 自定义 ASN CSV
+country_blocks_csv = "/etc/xuanarmor/geoip_country.csv"   # 自定义国家 CSV
+# asn_blocks_csv = "/etc/xuanarmor/geoip_asn.csv"         # 自定义 ASN CSV
 block_countries = ["XX"]                                # 阻止的国家代码
 # allow_countries = ["CN"]                              # 仅允许指定国家（default_action="drop" 时生效）
 # block_asns = [12345]
@@ -278,7 +278,7 @@ enabled = false
 #
 # [hub.tls]
 # enabled = true
-# ca_cert = "/etc/eshield/hub-ca.pem"          # 自定义 CA（可选）
-# client_cert = "/etc/eshield/hub-client.pem"  # 客户端证书（可选）
-# client_key = "/etc/eshield/hub-client.key"   # 客户端私钥（可选）
+# ca_cert = "/etc/xuanarmor/hub-ca.pem"          # 自定义 CA（可选）
+# client_cert = "/etc/xuanarmor/hub-client.pem"  # 客户端证书（可选）
+# client_key = "/etc/xuanarmor/hub-client.key"   # 客户端私钥（可选）
 # verify = true                                # 是否校验服务端证书

@@ -33,20 +33,20 @@ if [ -z "${CARGO:-}" ]; then
         exit 1
     fi
 fi
-EBPF_TOOLCHAIN="${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
+EBPF_TOOLCHAIN="${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
 export PATH="$(dirname "$CARGO"):$PATH"
 
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
     echo "=== Building XuanArmor ==="
-    "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
+    "$CARGO" +"$EBPF_TOOLCHAIN" build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q
 fi
 
 NS_S="st-server"; NS_C="st-client"
-BIN=/tmp/eshield-stress; CFG=/tmp/eshield-stress.toml; STORE=/tmp/eshield-stress.redb
-LOG=/tmp/eshield-stress.log; FEED_DIR=/tmp/eshield-stress-feed; API="http://127.0.0.1:${PORT}"
+BIN=/tmp/xuanarmor-stress; CFG=/tmp/xuanarmor-stress.toml; STORE=/tmp/xuanarmor-stress.redb
+LOG=/tmp/xuanarmor-stress.log; FEED_DIR=/tmp/xuanarmor-stress-feed; API="http://127.0.0.1:${PORT}"
 FAILS=0
 
 check() {
@@ -57,19 +57,19 @@ ns_curl() { ip netns exec "$NS_S" curl -sS --max-time 5 "$@"; }
 stat() { ns_curl "$API/api/stats" | jq -r ".$1 // 0"; }
 
 cleanup() {
-    kill "$ESHIELD_PID" "$FEED_PID" 2>/dev/null || true
-    wait "$ESHIELD_PID" 2>/dev/null || true
+    kill "$XUANARMOR_PID" "$FEED_PID" 2>/dev/null || true
+    wait "$XUANARMOR_PID" 2>/dev/null || true
     ip netns del "$NS_C" 2>/dev/null || true
     ip netns del "$NS_S" 2>/dev/null || true
     rm -rf "$BIN" "$CFG" "$STORE" "$LOG" "$FEED_DIR"
 }
 trap cleanup EXIT
 
-pkill -9 -f '^/tmp/eshield-stress( |$)' 2>/dev/null || true
+pkill -9 -f '^/tmp/xuanarmor-stress( |$)' 2>/dev/null || true
 ip netns del "$NS_C" 2>/dev/null || true
 ip netns del "$NS_S" 2>/dev/null || true
 mkdir -p "$FEED_DIR"
-cp target/x86_64-unknown-linux-musl/release/eshield "$BIN" && chmod +x "$BIN"
+cp target/x86_64-unknown-linux-musl/release/xuanarmor "$BIN" && chmod +x "$BIN"
 
 ip netns add "$NS_S"; ip netns add "$NS_C"
 ip link add veth-s type veth peer name veth-c
@@ -121,8 +121,8 @@ PY
 ip netns exec "$NS_S" sh -c "cd '$FEED_DIR' && python3 -m http.server 18099 --bind 127.0.0.1" >/dev/null 2>&1 &
 FEED_PID=$!
 rm -f "$STORE"
-ip netns exec "$NS_S" env ESHIELD_XDP_MODE=skb "$BIN" start --config "$CFG" >"$LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$NS_S" env XUANARMOR_XDP_MODE=skb "$BIN" start --config "$CFG" >"$LOG" 2>&1 &
+XUANARMOR_PID=$!
 READY=0
 for _ in $(seq 1 40); do
     if ns_curl -sf "$API/ready" >/dev/null 2>&1; then READY=1; break; fi
@@ -134,7 +134,7 @@ fi
 
 echo "=== Phase A: ${DURATION}s 混合洪水 soak（SYN + UDP 双路） ==="
 B_PKT=$(stat total_packets); B_DROP=$(stat total_dropped)
-P1=$(ns_curl "$API/metrics" | grep -c '^eshield_' || true)
+P1=$(ns_curl "$API/metrics" | grep -c '^xuanarmor_' || true)
 for i in $(seq 1 $((DURATION / 10 + 1))); do
     timeout 10s ip netns exec "$NS_C" hping3 --flood -S -p 80 10.11.0.1 >/dev/null 2>&1 &
     timeout 10s ip netns exec "$NS_C" hping3 --flood --udp -p 53 10.11.0.1 >/dev/null 2>&1 &
@@ -144,12 +144,12 @@ for i in $(seq 1 $((DURATION / 10 + 1))); do
 done
 sleep 2
 A_PKT=$(stat total_packets); A_DROP=$(stat total_dropped)
-P2=$(ns_curl "$API/metrics" | grep -c '^eshield_' || true)
+P2=$(ns_curl "$API/metrics" | grep -c '^xuanarmor_' || true)
 echo "  soak 合计处理 $((A_PKT - B_PKT)) 包，丢弃 $((A_DROP - B_DROP)) 包"
 check "压测期间控制面持续可用" "1" ""
 check "总包数单调增长" "$([ "$A_PKT" -gt "$B_PKT" ] && echo 1 || echo 0)" "+$((A_PKT-B_PKT))"
 check "指标族数量稳定（$P1 → $P2）" "$([ "$P2" -ge "$P1" ] && echo 1 || echo 0)" ""
-check "进程未崩溃" "$(pgrep -f '^/tmp/eshield-stress' >/dev/null && echo 1 || echo 0)" ""
+check "进程未崩溃" "$(pgrep -f '^/tmp/xuanarmor-stress' >/dev/null && echo 1 || echo 0)" ""
 
 echo
 echo "=== Phase B: 黑名单饱和（通过威胁情报一次性写入 ${SATURATE} 条） ==="
@@ -165,7 +165,7 @@ check "批量封禁写入黑名单" "$([ "$CNT" -gt 0 ] && echo 1 || echo 0)" "c
 # /metrics 的 map 条目数是后台按 metrics_interval_s（默认 30s）采样，需要轮询等待
 MET=""
 for _ in $(seq 1 25); do
-    MET=$(ns_curl "$API/metrics" | grep 'eshield_map_entries{.*BLACKLIST' || true)
+    MET=$(ns_curl "$API/metrics" | grep 'xuanarmor_map_entries{.*BLACKLIST' || true)
     echo "$MET" | grep -qE ' [1-9][0-9]*$' && break
     sleep 2
 done

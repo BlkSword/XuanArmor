@@ -46,7 +46,7 @@ bpf-linker --version
 
 ```bash
 ip link add dummy-esh type dummy && ip link set dummy-esh up
-sudo ESHIELD_XDP_MODE=skb ./target/x86_64-unknown-linux-musl/release/eshield start \
+sudo XUANARMOR_XDP_MODE=skb ./target/x86_64-unknown-linux-musl/release/xuanarmor start \
   --config <(printf 'interface="dummy-esh"\nweb_bind="127.0.0.1:18888"\n')
 # 日志出现 "attaching generic XDP" / "XuanArmor is running on" 即表示 verifier 通过
 ```
@@ -68,19 +68,19 @@ bash scripts/build-release.sh
 
 ```bash
 # 单元测试
-cargo test --workspace --exclude eshield-ebpf
+cargo test --workspace --exclude xuanarmor-ebpf
 
 # 集成测试（需要 root；SKIP_BUILD=1 复用已构建产物）
-cargo +nightly-2026-07-31 build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
-cargo build --package eshield --target x86_64-unknown-linux-musl --release
-sudo SKIP_BUILD=1 ESHIELD_TEST_XDP_MODE=skb bash tests/netns_test.sh
+cargo +nightly-2026-07-31 build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
+cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
+sudo SKIP_BUILD=1 XUANARMOR_TEST_XDP_MODE=skb bash tests/netns_test.sh
 
 # SYN Proxy 对带 TCP 选项 SYN 的兜底丢弃（需要 hping3）
 sudo SKIP_BUILD=1 bash tests/syn_proxy_options_test.sh
 ```
 
 > 集成测试脚本会自动探测 cargo 路径（sudo 重置 PATH 也能用），
-> 并在退出时恢复宿主机的 `/var/lib/eshield/rules.redb`，不会清掉已有动态规则。
+> 并在退出时恢复宿主机的 `/var/lib/xuanarmor/rules.redb`，不会清掉已有动态规则。
 
 ## Windows 开发者
 

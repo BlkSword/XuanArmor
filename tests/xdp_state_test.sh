@@ -24,9 +24,9 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    "$CARGO" +"${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package eshield-ebpf \
+    "$CARGO" +"${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package xuanarmor-ebpf \
         --target bpfel-unknown-none -Z build-std=core --release -q
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q
 fi
 
 NS_S=xd-server; NS_C=xd-client
@@ -39,7 +39,7 @@ cleanup() {
     wait "$PID" 2>/dev/null || true
     ip netns del "$NS_C" 2>/dev/null || true
     ip netns del "$NS_S" 2>/dev/null || true
-    rm -f /tmp/eshield-xd 2>/dev/null || true
+    rm -f /tmp/xuanarmor-xd 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -56,11 +56,11 @@ mkns() {
 }
 
 write_cfg() {
-    cat > /tmp/eshield-xd.toml <<TOML
+    cat > /tmp/xuanarmor-xd.toml <<TOML
 interface = "veth-x"
 web_bind = "127.0.0.1:${PORT}"
 log_level = "info"
-store_path = "/tmp/eshield-xd.redb"
+store_path = "/tmp/xuanarmor-xd.redb"
 whitelist = ["127.0.0.1/32"]
 blacklist = []
 
@@ -72,16 +72,16 @@ auto_reattach = true
 [rate_limit]
 enabled = false
 TOML
-    rm -f /tmp/eshield-xd.redb
+    rm -f /tmp/xuanarmor-xd.redb
 }
 
-pkill -9 -f '^/tmp/eshield-xd( |$)' 2>/dev/null || true
+pkill -9 -f '^/tmp/xuanarmor-xd( |$)' 2>/dev/null || true
 mkns
-cp target/x86_64-unknown-linux-musl/release/eshield /tmp/eshield-xd && chmod +x /tmp/eshield-xd
+cp target/x86_64-unknown-linux-musl/release/xuanarmor /tmp/xuanarmor-xd && chmod +x /tmp/xuanarmor-xd
 
 echo "=== 1) [xdp].mode = auto ==="
 write_cfg auto
-ip netns exec "$NS_S" env -u ESHIELD_XDP_MODE /tmp/eshield-xd start --config /tmp/eshield-xd.toml >/tmp/xd_auto.log 2>&1 &
+ip netns exec "$NS_S" env -u XUANARMOR_XDP_MODE /tmp/xuanarmor-xd start --config /tmp/xuanarmor-xd.toml >/tmp/xd_auto.log 2>&1 &
 PID=$!
 READY=0
 for _ in $(seq 1 40); do
@@ -94,7 +94,7 @@ ATT=$(ip netns exec "$NS_S" curl -sS "$API/api/stats" | jq -r '.xdp_attached')
 KERN=$(ip netns exec "$NS_S" ip -j link show dev veth-x | jq -r '.[0].xdp.prog.name // "none"')
 check "1" "$([ "$ATT" = "true" ] && [ "$MODE" != "unknown" ] && echo 1 || echo 0)" \
       "/api/stats 反映真实状态（attached=$ATT mode=$MODE）"
-check "1" "$([ "$KERN" = "eshield" ] && echo 1 || echo 0)" "内核里确实挂着 eshield（probe=$KERN）"
+check "1" "$([ "$KERN" = "xuanarmor" ] && echo 1 || echo 0)" "内核里确实挂着 xuanarmor（probe=$KERN）"
 grep -q "attached XDP in" /tmp/xd_auto.log && echo "[PASS] 启动日志包含挂载模式" || {
     echo "[FAIL] 启动日志缺少挂载模式"; FAILS=$((FAILS+1)); }
 kill "$PID" 2>/dev/null; wait "$PID" 2>/dev/null || true
@@ -104,7 +104,7 @@ echo "=== 2) [xdp].mode = native（驱动不支持时必须显式失败）==="
 mkns
 write_cfg native
 set +e
-timeout 20 ip netns exec "$NS_S" env -u ESHIELD_XDP_MODE /tmp/eshield-xd start --config /tmp/eshield-xd.toml >/tmp/xd_native.log 2>&1
+timeout 20 ip netns exec "$NS_S" env -u XUANARMOR_XDP_MODE /tmp/xuanarmor-xd start --config /tmp/xuanarmor-xd.toml >/tmp/xd_native.log 2>&1
 NATIVE_RC=$?
 set -e
 grep -q "native XDP attach failed" /tmp/xd_native.log && HINT=1 || HINT=0

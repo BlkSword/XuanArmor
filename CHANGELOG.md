@@ -1,16 +1,43 @@
 # Changelog
 
+## 0.6.0 (2026-11-02) — 统一命名 XuanArmor
+
+### 变更（不兼容）
+
+- 可执行文件：`eshield` → `xuanarmor`；Hub：`eshield-hub` → `xuanarmor-hub`。
+- systemd 服务：`eshield.service` → `xuanarmor.service`。
+- 配置/数据/日志路径：`/etc/eshield`、`/var/lib/eshield`、`/var/log/eshield`
+  改为 `/etc/xuanarmor`、`/var/lib/xuanarmor`、`/var/log/xuanarmor`。
+- eBPF 程序名、pinned link 与 bpffs 回退目录：`xuanarmor`、
+  `/run/xuanarmor-bpf/xuanarmor_xdp_link`。
+- Prometheus 指标前缀：`xuanarmor_*`。
+- Rust crate 与二进制：`xuanarmor`、`xuanarmor-common`、`xuanarmor-ebpf`、`xuanarmor-hub`。
+- 控制台会话 Cookie：`xuanarmor-token`。
+- 环境变量：`ESHIELD_*` → `XUANARMOR_*`（程序与安装脚本仍识别旧名，便于迁移）。
+
+### 迁移
+
+- 旧版本（≤ 0.5.1）直接执行新的一键安装：脚本会停止旧服务、备份旧二进制/配置、
+  复制并改写配置与数据到新路径，并创建 `/usr/local/bin/eshield` → `xuanarmor` 兼容软链。
+- 也可手动迁移配置与数据目录后启动 `xuanarmor` 服务，确认 `/ready` 返回 200。
+
+### 安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+```
+
 ## 0.5.1 (2026-10-31) — 平滑升级
 
 ### 新增
 
 - `[xdp].persist_link`（默认 `true`）：进程退出时不摘除 XDP 程序，旧程序继续过滤流量；
   新进程启动时由内核原子替换程序，升级/重启期间数据面不中断。
-- `eshield upgrade --binary <path>`：校验新二进制与配置 → 备份当前二进制 →
+- `xuanarmor upgrade --binary <path>`：校验新二进制与配置 → 备份当前二进制 →
   停服 → 安装 → 启动 → 轮询 `/ready` 健康检查；失败自动回滚到备份并重启。
   支持 `--rollback <dir>`、`--no-systemd --pid <pid>`、`--exec-prefix`。
-- `eshield detach`：摘除网卡上的 XDP 程序（`persist_link = true` 时服务停止后程序仍会驻留）。
-- `eshield --version`。
+- `xuanarmor detach`：摘除网卡上的 XDP 程序（`persist_link = true` 时服务停止后程序仍会驻留）。
+- `xuanarmor --version`。
 - `scripts/install.sh` 支持管道一键安装（`curl … | sudo bash`）：未指定版本时自动解析
   GitHub 最新 Release；systemd 不可用时优雅降级；新增 `--no-start`、`--no-systemd`；
   内嵌 systemd 单元作为下载失败兜底；安装后轮询 `/ready` 做健康检查并给出排障提示。
@@ -21,7 +48,7 @@
 ### 变更
 
 - 项目更名为 **XuanArmor**（原名 eShield）；可执行文件、systemd 服务名、配置路径与
-  `ESHIELD_*` 环境变量保持不变。
+  `XUANARMOR_*` 环境变量保持不变。
 
 - 默认行为：`SIGTERM` 退出时保留 XDP 挂载（fail-closed）。设置 `persist_link = false`
   可恢复 v0.5.0 的「退出即卸载」行为。
@@ -31,10 +58,10 @@
 ### 修复
 
 - `scripts/install.sh`：修复 `--version` 等带值参数在 `set -e` 下静默退出；
-  安装时创建 systemd 单元引用的 `/var/lib/eshield`、`/var/log/eshield` 目录；
-  自动准备 bpffs 挂载（`/run/eshield-bpf`），确保 XDP link 可 pin；
+  安装时创建 systemd 单元引用的 `/var/lib/xuanarmor`、`/var/log/xuanarmor` 目录；
+  自动准备 bpffs 挂载（`/run/xuanarmor-bpf`），确保 XDP link 可 pin；
   systemd 不可运行时降级为仅安装二进制。
-- `systemd` 单元允许写 `/sys/fs/bpf` 与 `/run/eshield-bpf`，并声明
+- `systemd` 单元允许写 `/sys/fs/bpf` 与 `/run/xuanarmor-bpf`，并声明
   `StateDirectory`/`LogsDirectory` 自动建目录。
 - `probe_xdp` 兼容 `ip -j -d` 的 `attached[]` 结构，程序名未知时按已挂载处理，
   避免把已挂载状态误判为裸奔并反复重挂。
@@ -42,7 +69,7 @@
 ### 兼容性
 
 - 新增配置项有默认值，旧配置文件可直接加载。
-- 若服务停止后不希望保留 XDP 挂载，升级前将 `persist_link` 设为 `false`，或停止后执行 `eshield detach`。
+- 若服务停止后不希望保留 XDP 挂载，升级前将 `persist_link` 设为 `false`，或停止后执行 `xuanarmor detach`。
 
 ### 文档
 
@@ -87,8 +114,8 @@
 
 - 新增 `GET /api/map-usage`：返回每个 eBPF map 的 `name/type/entries/max/ratio` 与
   `warn_threshold = 0.8`，数据来自后台采样缓存（`metrics_interval_s`，默认 30s），抓取路径不加锁。
-- `/metrics` 新增 `eshield_map_usage_ratio{name}`、`eshield_fragment_blocked_total{policy}`、
-  `eshield_port_rate_blocked_total`；配合已有的 `eshield_map_entries` / `eshield_map_max_entries`
+- `/metrics` 新增 `xuanarmor_map_usage_ratio{name}`、`xuanarmor_fragment_blocked_total{policy}`、
+  `xuanarmor_port_rate_blocked_total`；配合已有的 `xuanarmor_map_entries` / `xuanarmor_map_max_entries`
   可在 LRU 表被打满前告警（运维规则示例见 `docs/operations.md`）。
 - `/api/stats` 新增 `port_rate_blocked`、`fragment_blocked`。
 - `GET /api/config` 新增 `fragment_policy`、`rate_limit_block_mode`、`audit_path`、`audit_enabled`；
@@ -106,13 +133,13 @@
   （未启用文件审计时返回 `{"ok":true,"enabled":false,"message":"..."}`）。
   早期版本写入的无 hash 记录在校验时跳过。
 - **启动内存预检**：新增 `[limits]` 段——`min_memory_mb`（默认 512，低于该值告警）、
-  `refuse_memory_mb`（默认 256，低于该值拒绝启动），可用 `ESHIELD_ALLOW_LOW_MEMORY=1` 强制启动
+  `refuse_memory_mb`（默认 256，低于该值拒绝启动），可用 `XUANARMOR_ALLOW_LOW_MEMORY=1` 强制启动
   （不推荐）。背景：400MB 内存实例装 nginx + XuanArmor 后 `sshd` 失去响应（TCP 通但 banner 不返回）。
 - **安装生命周期**：`scripts/install.sh` 新增 `--version <x.y.z>`、`--sha256 <hex>`
-  （或 `ESHIELD_EXPECTED_SHA`）、`--uninstall`、`--purge`、`--rollback [dir]`、`--help`。
+  （或 `XUANARMOR_EXPECTED_SHA`）、`--uninstall`、`--purge`、`--rollback [dir]`、`--help`。
   升级前自动把当前二进制/配置/systemd 单元/版本号备份到
-  `/var/lib/eshield/backup/<YYYYmmdd-HHMMSS>/`（只保留最近 5 份），升级过程先停服务再装新版本；
-  卸载默认保留配置与数据，`--purge` 才删除 `/etc/eshield`、持久化目录与 `/var/log/eshield`。
+  `/var/lib/xuanarmor/backup/<YYYYmmdd-HHMMSS>/`（只保留最近 5 份），升级过程先停服务再装新版本；
+  卸载默认保留配置与数据，`--purge` 才删除 `/etc/xuanarmor`、持久化目录与 `/var/log/xuanarmor`。
 
 ### 文档与测试
 
@@ -177,7 +204,7 @@
 - **根因已定位**：`virtio_net` 在宿主机实现 GRO_HW/CSUM 时 `virtnet_xdp_set()` 直接拒绝
   native XDP（内核报 `Can't set XDP while host is implementing GRO_HW/CSUM`）；本机
   `rx-gro-hw` 为 `[fixed]`，guest 侧无法关闭，因此只能 generic。该结论已写入文档。
-- 新增 XDP 巡检任务（15s）：`ip -j link show` 校验网卡上是否真的挂着 `eshield` 程序；
+- 新增 XDP 巡检任务（15s）：`ip -j link show` 校验网卡上是否真的挂着 `xuanarmor` 程序；
   被摘掉/驱动重置时 `/ready` 立即返回 503、`/api/stats` 输出 `xdp_attached/xdp_mode`，
   并按 `auto_reattach` 自动重挂。控制台顶栏显示 `XDP native/generic/未挂载`。
 
@@ -196,19 +223,19 @@
 
 ### 部署安全（P0）
 
-- 控制台在非环回监听且未设置 `ESHIELD_ASSUME_TLS_PROXY=1` 时打印**明文 HTTP 告警**
+- 控制台在非环回监听且未设置 `XUANARMOR_ASSUME_TLS_PROXY=1` 时打印**明文 HTTP 告警**
   （token 被嗅探即可完全接管）。
-- `eshield-hub` 未配置 `--node-tokens-file` 且非环回监听时告警：master token 可冒充任意
+- `xuanarmor-hub` 未配置 `--node-tokens-file` 且非环回监听时告警：master token 可冒充任意
   `node_name`，多节点环境必须使用 per-node token。
 - `/api/stats` 新增 `xdp_attached` / `xdp_mode`；`/ready` 响应体新增同名字段。
 
 ## 0.4.7 (2026-10-06)
 
-> **控制台入口变更**：`/` 与 `/login` 统一提供 Vue 3 单文件 SPA；旧版 `eshield/web/{index.html,css,js}`、`eshield/src/echarts.min.js`、`eshield/src/login.html` 已删除。新 API：`GET /api/blacklist`、`GET /api/whitelist`。
+> **控制台入口变更**：`/` 与 `/login` 统一提供 Vue 3 单文件 SPA；旧版 `xuanarmor/web/{index.html,css,js}`、`xuanarmor/src/echarts.min.js`、`xuanarmor/src/login.html` 已删除。新 API：`GET /api/blacklist`、`GET /api/whitelist`。
 
 ### 新增
 
-- **控制台重构为 Vue 3 单文件 SPA**：新增 `console/` 前端工程（Vue 3 + TypeScript + Vite + ECharts），构建产物 `eshield/web/app.html` 由 `include_str!` 嵌入二进制；页面覆盖总览、攻击事件、包日志、审计日志、防护模块、访问控制、L7 指纹、防护项目、GeoIP 与情报、规则与 Hub、系统设置与登录；支持命令面板、深浅色切换、live/mock 自适应数据源与运行参数热更新。
+- **控制台重构为 Vue 3 单文件 SPA**：新增 `console/` 前端工程（Vue 3 + TypeScript + Vite + ECharts），构建产物 `xuanarmor/web/app.html` 由 `include_str!` 嵌入二进制；页面覆盖总览、攻击事件、包日志、审计日志、防护模块、访问控制、L7 指纹、防护项目、GeoIP 与情报、规则与 Hub、系统设置与登录；支持命令面板、深浅色切换、live/mock 自适应数据源与运行参数热更新。
 - 新增 `GET /api/blacklist` 与 `GET /api/whitelist`，返回实时 eBPF 黑名单与白名单 CIDR。
 - 新增 `console/scripts/mockapi.py` 与 `console/scripts/wiring.mjs`：按真实 API envelope 做前后端接线回归（11 页面 + IP 详情抽屉）。
 
@@ -223,7 +250,7 @@
 
 ### 改进
 
-- 移除 `web.rs` 中不再使用的 ECharts 与旧版控制台静态资源表，并删除 `eshield/web/{index.html,css,js}`、`eshield/src/echarts.min.js`、`eshield/src/login.html`；musl release 二进制由 9.94MB 回落到 8.71MB。
+- 移除 `web.rs` 中不再使用的 ECharts 与旧版控制台静态资源表，并删除 `xuanarmor/web/{index.html,css,js}`、`xuanarmor/src/echarts.min.js`、`xuanarmor/src/login.html`；musl release 二进制由 9.94MB 回落到 8.71MB。
 - `web.rs` 中攻击事件的规则显示名收敛到 `rule_display_name()`，消除重复 match。
 
 ### 测试与文档
@@ -235,14 +262,14 @@
 
 ## 0.4.6 (2026-09-29)
 
-> **兼容性变更**：为满足 Linux 内核 7.0 verifier 的 100 万指令处理上限，`port_acl` 规则上限由 128 调整为 32，`l7_scan.patterns` 上限由 16 调整为 8；超限配置在 `eshield check` 阶段拒绝。需要更多规则时应拆分配置；哈希匹配方案尚未实现。
+> **兼容性变更**：为满足 Linux 内核 7.0 verifier 的 100 万指令处理上限，`port_acl` 规则上限由 128 调整为 32，`l7_scan.patterns` 上限由 16 调整为 8；超限配置在 `xuanarmor check` 阶段拒绝。需要更多规则时应拆分配置；哈希匹配方案尚未实现。
 
 ### 新增
 
 - **可选连接跟踪 / CC 防御（`[conn_track]`）**：新增 eBPF `CONN_TRACK` LRU Hash，按源统计窗口内未完成握手的半连接数；仅 SYN/ACK/RST 访问 map，普通数据包零额外开销；超过阈值执行 DROP；默认关闭，支持防护项目位图控制；Web 控制台与 Prometheus 新增 `conn_track_blocked` 指标；netns 新增半连接拦截与 ICMP 不误伤用例。
-- **Hub 每节点 Token**：`eshield-hub` 新增 `--node-tokens-file`，每行格式为 `node_name:token`；节点专属 Token 认证后，Hub 强制使用认证节点名记录策略与限流，防止请求体伪造 `node_name`；master token 保持兼容；新增 Hub `/login` 页面与 Dashboard Token 持久化。
+- **Hub 每节点 Token**：`xuanarmor-hub` 新增 `--node-tokens-file`，每行格式为 `node_name:token`；节点专属 Token 认证后，Hub 强制使用认证节点名记录策略与限流，防止请求体伪造 `node_name`；master token 保持兼容；新增 Hub `/login` 页面与 Dashboard Token 持久化。
 - **控制台全量替换**：浅色优先并跟随系统 `prefers-color-scheme`；纯文字导航；总览 KPI 扩展为 18 项；全部已实现模块的开关与参数集中管理；新增 `Ctrl/Cmd+K` 命令面板与 `g` 系列快捷键；移除威胁雷达、世界地图与装饰性图标；攻击事件、防护规则、实时流量、审计、集群、设置页面统一样式。
-- **内核 7.0 兼容与工具链固定**：固定 `nightly-2026-07-31` 与 `bpf-linker 0.10.4`；新增 `ESHIELD_XDP_MODE=skb|generic` 强制 SKB 通用模式；`xtask`、CI、Docker、release 脚本同步固定工具链。
+- **内核 7.0 兼容与工具链固定**：固定 `nightly-2026-07-31` 与 `bpf-linker 0.10.4`；新增 `XUANARMOR_XDP_MODE=skb|generic` 强制 SKB 通用模式；`xtask`、CI、Docker、release 脚本同步固定工具链。
 - **防护项目数据面落地**：新增 `PROJECT_POLICY` map，按目标 IPv4 + 端口 + 协议匹配；PASS/DROP/DEFEND 在数据面生效；DEFEND 按 `enabled_modules` 位图过滤全局模块；CIDR 展开下限 `/24`，项目上限 8192。
 - **GeoIP allowlist 与 default_action**：新增 `GEOIP_ALLOWED_V4/V6` LPM Trie；支持仅放行 allow 列表、其余丢弃；CSV 解析结果按路径/mtime/大小缓存，reload 时文件未变化直接复用。
 - **按目的端口限速（`[port_rate_limit]`）**：按协议 + 目的端口固定窗口限速，降低换源 IP 绕过 per-IP 限速的风险；超限仅 DROP，不自动加入黑名单；默认关闭。
@@ -275,10 +302,10 @@
 
 ### 测试
 
-- 单元测试：`cargo test --workspace --exclude eshield-ebpf` 共 57 项通过。
-- netns 集成测试：`ESHIELD_TEST_XDP_MODE=skb bash tests/netns_test.sh` 12 项全部通过（内核 7.0），覆盖黑名单、TCP RST、速率限制、SYN Cookie、UDP/ICMP Flood、L7、SIGHUP、自适应、GeoIP、威胁情报、防护项目、分片与连接跟踪。
-- Hub-Node 集成测试：`ESHIELD_XDP_MODE=skb bash tests/hub_node_test.sh` 8 项全部通过（含每节点 Token）。
-- 冒烟测试：`ESHIELD_XDP_MODE=skb bash tests/full_attack_test.sh` 通过。
+- 单元测试：`cargo test --workspace --exclude xuanarmor-ebpf` 共 57 项通过。
+- netns 集成测试：`XUANARMOR_TEST_XDP_MODE=skb bash tests/netns_test.sh` 12 项全部通过（内核 7.0），覆盖黑名单、TCP RST、速率限制、SYN Cookie、UDP/ICMP Flood、L7、SIGHUP、自适应、GeoIP、威胁情报、防护项目、分片与连接跟踪。
+- Hub-Node 集成测试：`XUANARMOR_XDP_MODE=skb bash tests/hub_node_test.sh` 8 项全部通过（含每节点 Token）。
+- 冒烟测试：`XUANARMOR_XDP_MODE=skb bash tests/full_attack_test.sh` 通过。
 - 静态检查：`cargo fmt --check`、userspace+eBPF clippy（`-D warnings`）通过。
 - README 中英文重写为正式技术文档，补充架构、配置、性能与限制说明。
 
@@ -287,7 +314,7 @@
 
 ### 新增
 
-- **控制台全面重写**：新控制台位于 `eshield/web/`，原生 ES modules + 模块化 CSS，无前端构建链，仍全部嵌入单二进制。
+- **控制台全面重写**：新控制台位于 `xuanarmor/web/`，原生 ES modules + 模块化 CSS，无前端构建链，仍全部嵌入单二进制。
   - 暗色优先 SOC 视觉体系（完整 design tokens，暗/亮双主题），统一 SVG 线性图标，替换 emoji。
   - 九个页面：总览 / 攻击事件 / 包日志 / 审计日志 / 防护策略 / 规则中心 / 安全运营 / 集群节点 / 设置。
   - 总览页：6 张 KPI 卡（sparkline + 模块状态点）、按防御模块分解的趋势图（折线/堆叠 + 15分钟~24小时四档）、实时拦截事件流、协议分布环图、TOP 端口、TOP 攻击源。
@@ -320,7 +347,7 @@
 
 ### 新增
 
-- **分布式 Hub-Node 协同免疫**：新增 `eshield-hub` 二进制，作为策略聚合中心。
+- **分布式 Hub-Node 协同免疫**：新增 `xuanarmor-hub` 二进制，作为策略聚合中心。
   - 节点通过 `[hub]` 配置上报本地黑名单/Trust Score 到 Hub。
   - 节点从 Hub 拉取其他节点策略与 Hub 威胁情报，实现跨节点共享免疫记忆。
   - Hub 端点：`/api/v1/policies`、`/api/v1/policies/deleted`、`/api/v1/rules`、`/api/v1/nodes`、`/api/v1/stats`。
@@ -355,13 +382,13 @@
 ### 改进
 
 - **eBPF 代码去重**：提取 `rate_counter.rs`（共享速率衰减逻辑）和 `blacklist.rs::add_to_blacklist`（共享黑名单插入），四个 flood 模块不再各自复制相同逻辑。
-- **纯函数提取与单元测试**：新增 `eshield-common/src/pure.rs`，将 `build_cookie`、`checksum`、`tcp_checksum`、`decay_counter`、`match_port_acl_entry`、`mix`、`mss_to_idx` 等无 eBPF 依赖的纯函数提取出来，并编写 20 个单元测试覆盖校验和、Cookie 构造、速率衰减、ACL 匹配逻辑。
+- **纯函数提取与单元测试**：新增 `xuanarmor-common/src/pure.rs`，将 `build_cookie`、`checksum`、`tcp_checksum`、`decay_counter`、`match_port_acl_entry`、`mix`、`mss_to_idx` 等无 eBPF 依赖的纯函数提取出来，并编写 20 个单元测试覆盖校验和、Cookie 构造、速率衰减、ACL 匹配逻辑。
 - **优雅退出（XDP 卸载）**：保存 `xdp_link_id`，SIGTERM/SIGINT 时显式 `xdp.detach()` 卸载 XDP 程序，避免遗留悬空钩子。
-- **时间函数统一**：新增 `eshield/src/time.rs`，所有写入 eBPF map 的时间戳统一使用 `CLOCK_MONOTONIC`；告警等 wall-clock 场景保留 `SystemTime` 并添加注释说明。
+- **时间函数统一**：新增 `xuanarmor/src/time.rs`，所有写入 eBPF map 的时间戳统一使用 `CLOCK_MONOTONIC`；告警等 wall-clock 场景保留 `SystemTime` 并添加注释说明。
 - **`BLOCK_PERMANENT` 常量**：消除 `blocked_until_ns == 0` 语义歧义。
 - **审计日志文件持久化**：新增 `FileAuditBackend`，支持 JSON Lines 格式 + 自动轮转；新增 `[audit]` 配置段。
 - **API 错误格式统一**：所有 API 端点错误统一返回 `{"error":"..."}` JSON 格式。
-- **install.sh 改进**：版本号从 `Cargo.toml` 自动解析；service 路径修正为 `packaging/eshield.service`；默认白名单与 `config.example.toml` 对齐。
+- **install.sh 改进**：版本号从 `Cargo.toml` 自动解析；service 路径修正为 `packaging/xuanarmor.service`；默认白名单与 `config.example.toml` 对齐。
 - **Token 日志安全**：自动生成的访问令牌仅打印前 8 位前缀且降级为 `warn`。
 - **Dashboard ECharts 离线化**：ECharts 库嵌入二进制，不再依赖外部 CDN。
 - **Dashboard HTML 转义**：所有用户/服务端数据在 `innerHTML` 渲染前经过 `escHtml()` 转义，防止 XSS。
@@ -389,7 +416,7 @@
 
 ### 修复
 
-- **Dashboard 登录后仍被重定向**：登录接口现在写入 `eshield-token` Cookie，认证中间件同时支持 `Authorization: Bearer <token>` 和 `Cookie: eshield-token=<token>`，解决控制台输入 Token 后仍停留在登录页的问题。
+- **Dashboard 登录后仍被重定向**：登录接口现在写入 `xuanarmor-token` Cookie，认证中间件同时支持 `Authorization: Bearer <token>` 和 `Cookie: xuanarmor-token=<token>`，解决控制台输入 Token 后仍停留在登录页的问题。
 - **事件消费高 CPU**：SYN Flood / UDP Flood / ICMP Flood / L7 / BLACKLIST / GEOIP 事件不再进入自适应引擎，避免海量事件反复操作 DashMap 占满 CPU。
 - **启动统计被旧事件污染**：Ring Buffer 残留 stale 事件 drain 上限从 100 万提高到 5000 万，防止前一次测试的巨量事件污染新进程统计。
 

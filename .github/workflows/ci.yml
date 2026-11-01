@@ -38,11 +38,11 @@ jobs:
           sudo tar -xf /tmp/bl.tar -C /usr/local/bin
           bpf-linker --version
       - name: Build eBPF (embedded by userspace crate)
-        run: cargo +nightly-2026-07-31 build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
+        run: cargo +nightly-2026-07-31 build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
       - name: Check fmt
         run: cargo +stable fmt --check
       - name: Run clippy
-        run: cargo +stable clippy --workspace --exclude eshield-ebpf -- -D warnings
+        run: cargo +stable clippy --workspace --exclude xuanarmor-ebpf -- -D warnings
 
   clippy-ebpf:
     runs-on: ubuntu-latest
@@ -68,7 +68,7 @@ jobs:
           sudo tar -xf /tmp/bl.tar -C /usr/local/bin
           bpf-linker --version
       - name: Run eBPF clippy
-        run: cargo +nightly-2026-07-31 clippy --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core -- -D warnings
+        run: cargo +nightly-2026-07-31 clippy --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core -- -D warnings
 
   build:
     runs-on: ubuntu-latest
@@ -100,7 +100,7 @@ jobs:
       - name: Build eBPF
         run: cargo xtask build-ebpf
       - name: Build userspace
-        run: cargo build --package eshield --target x86_64-unknown-linux-musl --release
+        run: cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
 
   unit-tests:
     runs-on: ubuntu-latest
@@ -128,9 +128,9 @@ jobs:
           sudo tar -xf /tmp/bl.tar -C /usr/local/bin
           bpf-linker --version
       - name: Build eBPF (embedded by userspace crate)
-        run: cargo +nightly-2026-07-31 build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
+        run: cargo +nightly-2026-07-31 build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
       - name: Run unit tests
-        run: cargo +stable test --workspace --exclude eshield-ebpf
+        run: cargo +stable test --workspace --exclude xuanarmor-ebpf
 
   console-build:
     runs-on: ubuntu-latest
@@ -147,7 +147,7 @@ jobs:
       - name: Type-check and build single-file SPA
         run: cd console && npm run build
       - name: Verify embedded app.html matches console/dist (must be byte-identical)
-        run: diff -q console/dist/index.html eshield/web/app.html
+        run: diff -q console/dist/index.html xuanarmor/web/app.html
 
   integration-tests:
     name: integration-tests (${{ matrix.os }})
@@ -159,7 +159,7 @@ jobs:
     env:
       CARGO: cargo
       RUSTUP: rustup
-      ESHIELD_EBPF_TOOLCHAIN: nightly-2026-07-31
+      XUANARMOR_EBPF_TOOLCHAIN: nightly-2026-07-31
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust nightly + bpf target
@@ -190,28 +190,28 @@ jobs:
       - name: Print kernel version
         run: uname -r
       - name: Build eBPF
-        run: cargo +nightly-2026-07-31 build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
+        run: cargo +nightly-2026-07-31 build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
       - name: Build userspace
-        run: cargo build --package eshield --target x86_64-unknown-linux-musl --release
+        run: cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
       - name: Run integration tests
         env:
           SKIP_BUILD: "1"
-          ESHIELD_TEST_XDP_MODE: skb
-          ESHIELD_EBPF_TOOLCHAIN: nightly-2026-07-31
+          XUANARMOR_TEST_XDP_MODE: skb
+          XUANARMOR_EBPF_TOOLCHAIN: nightly-2026-07-31
           CARGO: /home/runner/.cargo/bin/cargo
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
         run: |
           # sudo 默认重置环境（含 PATH），必须显式保留 cargo 路径，否则脚本找不到工具链
-          sudo --preserve-env=SKIP_BUILD,ESHIELD_TEST_XDP_MODE,ESHIELD_EBPF_TOOLCHAIN,CARGO,CARGO_HOME,RUSTUP_HOME \
+          sudo --preserve-env=SKIP_BUILD,XUANARMOR_TEST_XDP_MODE,XUANARMOR_EBPF_TOOLCHAIN,CARGO,CARGO_HOME,RUSTUP_HOME \
             bash tests/netns_test.sh
       - name: Run SYN proxy option-header regression
         env:
           SKIP_BUILD: "1"
-          ESHIELD_EBPF_TOOLCHAIN: nightly-2026-07-31
+          XUANARMOR_EBPF_TOOLCHAIN: nightly-2026-07-31
           CARGO: /home/runner/.cargo/bin/cargo
           CARGO_HOME: /home/runner/.cargo
           RUSTUP_HOME: /home/runner/.rustup
         run: |
-          sudo --preserve-env=SKIP_BUILD,ESHIELD_EBPF_TOOLCHAIN,CARGO,CARGO_HOME,RUSTUP_HOME \
+          sudo --preserve-env=SKIP_BUILD,XUANARMOR_EBPF_TOOLCHAIN,CARGO,CARGO_HOME,RUSTUP_HOME \
             bash tests/syn_proxy_options_test.sh

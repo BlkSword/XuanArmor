@@ -75,7 +75,7 @@ async function submit() {
             v-model="token"
             class="input mono"
             :type="show ? 'text' : 'password'"
-            placeholder="eshield-••••••••"
+            placeholder="xuanarmor-••••••••"
             @keyup.enter="submit"
           />
           <button class="btn btn-sm" style="flex: none" @click="show = !show">{{ show ? '隐藏' : '显示' }}</button>

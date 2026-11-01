@@ -1,6 +1,6 @@
 # XuanArmor 模块耦合性评估（2026-10）
 
-> 评估对象：v0.4.6 之后的控制台重构版本（`console/` + `eshield/web/app.html`）
+> 评估对象：v0.4.6 之后的控制台重构版本（`console/` + `xuanarmor/web/app.html`）
 > 方法：静态分层与 import / 调用关系统计、共享状态审查、前后端接口逐条核对
 > 结论口径：只评价代码结构与依赖方向，不评价运行时性能
 
@@ -8,16 +8,16 @@
 
 | 单元 | 职责 | 允许依赖 |
 |---|---|---|
-| `eshield-ebpf` | XDP 数据面：解析、黑白名单、Flood、L7、连接跟踪、SYN Cookie | `eshield-common` |
-| `eshield-common` | eBPF/用户态共享结构体、常量、纯函数 | 无 |
-| `eshield` | 控制面：配置、API、CLI/TUI、持久化、审计、告警、Hub 客户端 | `eshield-common` |
-| `eshield-hub` | 分布式策略中心：策略合并、节点心跳、鉴权 | `eshield-common` |
+| `xuanarmor-ebpf` | XDP 数据面：解析、黑白名单、Flood、L7、连接跟踪、SYN Cookie | `xuanarmor-common` |
+| `xuanarmor-common` | eBPF/用户态共享结构体、常量、纯函数 | 无 |
+| `xuanarmor` | 控制面：配置、API、CLI/TUI、持久化、审计、告警、Hub 客户端 | `xuanarmor-common` |
+| `xuanarmor-hub` | 分布式策略中心：策略合并、节点心跳、鉴权 | `xuanarmor-common` |
 | `console` | 控制台前端 | 仅 HTTP 契约 |
 
-依赖方向为单向：`eshield-ebpf` / `eshield` / `eshield-hub` → `eshield-common`，
+依赖方向为单向：`xuanarmor-ebpf` / `xuanarmor` / `xuanarmor-hub` → `xuanarmor-common`，
 三个 crate 之间没有交叉依赖，`console` 不依赖 Rust 代码。**无循环依赖**，这是当前结构最大的优点。
 
-## 2. 数据面（eshield-ebpf）耦合
+## 2. 数据面（xuanarmor-ebpf）耦合
 
 规模：`main.rs` 975 行，其余模块均小于 410 行，总计约 2576 行。
 
@@ -37,12 +37,12 @@ conn_track → TCP → UDP → ICMP → L7 → 全局限速」固定顺序调用
 好的部分：
 
 - `RuntimeConfig` 是数据面所有开关/阈值的单一来源，`PROJECT_POLICY.flags` 位图让全局模块可按项目复用；
-- 共享结构体统一放在 `eshield-common`，`repr(C)` 与 padding 显式声明；
+- 共享结构体统一放在 `xuanarmor-common`，`repr(C)` 与 padding 显式声明；
 - 无模块间循环调用，新增一个检测模块通常是「新增文件 + main 内一个 if 分支」。
 
 需要关注的部分：
 
-1. **`RuntimeConfig` 是扁平大结构**：新增模块要同时改 `eshield-common`、`init_config_map`、
+1. **`RuntimeConfig` 是扁平大结构**：新增模块要同时改 `xuanarmor-common`、`init_config_map`、
    `ControlState::runtime`、`RuntimeConfigPatch`、Web 前端。属于 shotgun surgery，建议按模块拆成
    嵌套结构（如 `cfg.l7.*`、`cfg.conn_track.*`）或每模块独立 config map，并给 `RuntimeConfig` 加版本号。
 2. **`RATE_MAP` 被 3 个模块共享**，`BLACKLIST` 被 3 个模块写：这是性能取向的合理取舍，但意味着
@@ -53,7 +53,7 @@ conn_track → TCP → UDP → ICMP → L7 → 全局限速」固定顺序调用
 
 评分：**8 / 10**。
 
-## 3. 控制面（eshield）耦合
+## 3. 控制面（xuanarmor）耦合
 
 规模：`control.rs` 1867 行、22 个 `pub async fn`；`web.rs` 1787 行；`main.rs` 1156 行；`config.rs` 1154 行。
 `control.rs` 同时管理 blacklist、whitelist、GeoIP、port ACL、L7、protection projects、runtime
@@ -88,17 +88,17 @@ API 层、展示层与资源层三种职责。
    `ControlState` 退化为 facade，只负责依赖注入与审计。
 3. `ControlState` 字段改私有，Web 通过 `list_blacklist()`、`list_whitelist()`、`runtime_snapshot()`
    等只读方法访问；禁止直接 `control.ebpf.lock()`。
-4. 规则显示名统一到 `eshield-common::rules::display_name()`；本轮已把 `web.rs` 内
+4. 规则显示名统一到 `xuanarmor-common::rules::display_name()`；本轮已把 `web.rs` 内
    `attack_events_handler` 的重复 match 收敛到 `rule_display_name`。
 
 评分：**5 / 10**。
 
 ## 4. Hub 与持久化耦合
 
-- `hub_client.rs` 486 行，通过 `eshield-common::SharedPolicy` 与 Hub 交换策略，未直接依赖 `control.rs`；
+- `hub_client.rs` 486 行，通过 `xuanarmor-common::SharedPolicy` 与 Hub 交换策略，未直接依赖 `control.rs`；
 - `store.rs` 535 行，redb 表与序列化集中在内部；
 - `blacklist_sync.rs` 205 行，职责单一：扫描 eBPF `BLACKLIST` → 增量写 store；
-- `adaptive.rs`、`threat_intel.rs`、`geoip.rs` 各自独立，依赖 `eshield-common` 与 `control` 的公开方法。
+- `adaptive.rs`、`threat_intel.rs`、`geoip.rs` 各自独立，依赖 `xuanarmor-common` 与 `control` 的公开方法。
 
 Hub 侧的合并规则（本地优先、tombstone、`source_nodes` 过滤）目前散落在 `control.rs`
 的 `apply_hub_policies` / `unblock_hub_policies` 中，建议抽成 `policy_merge.rs` 并补单元测试，
@@ -108,7 +108,7 @@ Hub 侧的合并规则（本地优先、tombstone、`source_nodes` 过滤）目�
 
 ## 5. 前后端契约
 
-本轮逐条核对 `console/src/api/client.ts` 的调用与 `eshield/src/web.rs` 的路由后，发现并修复：
+本轮逐条核对 `console/src/api/client.ts` 的调用与 `xuanarmor/src/web.rs` 的路由后，发现并修复：
 
 | 问题 | 修复 |
 |---|---|
@@ -119,7 +119,7 @@ Hub 侧的合并规则（本地优先、tombstone、`source_nodes` 过滤）目�
 | `/api/metrics/series` 时间戳为单调秒，前端需要 wall-clock | 后端新增 `timestamp_ns` 字段（wall-clock 纳秒），保留原字段兼容 |
 | 前端传 `?hours=24`，后端参数是 `duration_s` | 前端改为 `?duration_s=86400` |
 | 模块开关前端拼 `{id}_enabled`，后端 `RuntimeConfigPatch` 并不存在该字段 | 新增 `modulePatch()` 映射（含 `port_rate_limit` 整体对象、`adaptive` 对象） |
-| `/api/l7-patterns` 校验 16 > map 容量 8；`/api/port-acl` 校验 128 > map 容量 32 | 两端改为 `eshield_common::MAX_L7_PATTERNS` / `MAX_PORT_ACL`，`init_l7_patterns_map` 同步改为按常量清理/写入 |
+| `/api/l7-patterns` 校验 16 > map 容量 8；`/api/port-acl` 校验 128 > map 容量 32 | 两端改为 `xuanarmor_common::MAX_L7_PATTERNS` / `MAX_PORT_ACL`，`init_l7_patterns_map` 同步改为按常量清理/写入 |
 | `DELETE /api/blacklist` 对不存在 IP 返回底层错误 | `unblock_ip_key` 改为幂等 |
 | IP 详情抽屉只读 mock 数据 | 接入 `/api/ip-detail` + `/api/ip-series` |
 | GeoIP 重载、威胁情报同步、Hub 节点列表只弹 toast | 分别接入 `/api/geoip/reload`、`/api/threat-intel/sync`、`/api/hub/status`、`/api/hub/proxy/nodes` |
@@ -154,7 +154,7 @@ Hub 侧的合并规则（本地优先、tombstone、`source_nodes` 过滤）目�
 每次新增模块的改动成本。建议按以下优先级处理：
 
 - **P0**：`web.rs` / `control.rs` 拆分；`ControlState` 字段私有化；前后端接线测试进 CI。
-- **P1**：`RuntimeConfig` 按模块分组；规则显示名上移到 `eshield-common`；Hub 合并规则抽离。
-  旧 `eshield/web/{index.html,css,js}` 与 `eshield/src/{echarts.min.js,login.html}` 已删除，
+- **P1**：`RuntimeConfig` 按模块分组；规则显示名上移到 `xuanarmor-common`；Hub 合并规则抽离。
+  旧 `xuanarmor/web/{index.html,css,js}` 与 `xuanarmor/src/{echarts.min.js,login.html}` 已删除，
   musl release 二进制回落到 8.71MB。
 - **P2**：eBPF `main.rs` 管线拆分；每模块独立 config map；共享 `RATE_MAP` / `BLACKLIST` 契约测试。

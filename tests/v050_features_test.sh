@@ -27,9 +27,9 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.." || exit 1
 
 if [ -z "${SKIP_BUILD:-}" ]; then
-    "$CARGO" +"${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package eshield-ebpf \
+    "$CARGO" +"${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package xuanarmor-ebpf \
         --target bpfel-unknown-none -Z build-std=core --release -q || exit 1
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q || exit 1
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q || exit 1
 fi
 
 NS_S=v5-server; NS_C=v5-client
@@ -82,7 +82,7 @@ cleanup() {
     [ -n "${PID:-}" ] && wait "$PID" 2>/dev/null
     ip netns del "$NS_C" 2>/dev/null
     ip netns del "$NS_S" 2>/dev/null
-    rm -f /tmp/eshield-v5 /tmp/v050-audit.log* /tmp/eshield-v050.redb "$FRAG_SENDER" 2>/dev/null
+    rm -f /tmp/xuanarmor-v5 /tmp/v050-audit.log* /tmp/xuanarmor-v050.redb "$FRAG_SENDER" 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -99,11 +99,11 @@ mkns() {
 
 # 基础配置：只有网络/存储/开关，模块段由各用例追加（避免重复 table）
 write_cfg() {
-    cat > /tmp/eshield-v5.toml <<'TOML'
+    cat > /tmp/xuanarmor-v5.toml <<'TOML'
 interface = "veth-v5"
 web_bind = "127.0.0.1:18731"
 log_level = "warn"
-store_path = "/tmp/eshield-v050.redb"
+store_path = "/tmp/xuanarmor-v050.redb"
 whitelist = ["127.0.0.1/32"]
 blacklist = []
 udp_flood_enabled = false
@@ -114,15 +114,15 @@ mode = "auto"
 disable_offloads = true
 TOML
     if [ -n "${1:-}" ]; then
-        printf '\n%s\n' "$1" >> /tmp/eshield-v5.toml
+        printf '\n%s\n' "$1" >> /tmp/xuanarmor-v5.toml
     fi
-    rm -f /tmp/eshield-v050.redb
+    rm -f /tmp/xuanarmor-v050.redb
 }
 
 start_es() {
-    pkill -9 -f '^/tmp/eshield-v5 start' 2>/dev/null
+    pkill -9 -f '^/tmp/xuanarmor-v5 start' 2>/dev/null
     sleep 0.2
-    ip netns exec "$NS_S" /tmp/eshield-v5 start --config /tmp/eshield-v5.toml >/tmp/v5.log 2>&1 &
+    ip netns exec "$NS_S" /tmp/xuanarmor-v5 start --config /tmp/xuanarmor-v5.toml >/tmp/v5.log 2>&1 &
     PID=$!
     for _ in $(seq 1 60); do
         if ip netns exec "$NS_S" curl -sf --max-time 2 "$API/ready" >/dev/null 2>&1; then return 0; fi
@@ -137,13 +137,13 @@ stat_field() { api "$API/api/stats" | jq -r ".$1 // 0"; }
 blacklist_count() { api "$API/api/blacklist" | jq -r '.count // 0'; }
 send_frags() { ip netns exec "$NS_C" python3 "$FRAG_SENDER" 10.55.0.1 "${1:-3000}" >/dev/null 2>&1; }
 
-pkill -9 -f '^/tmp/eshield-v5 start' 2>/dev/null
+pkill -9 -f '^/tmp/xuanarmor-v5 start' 2>/dev/null
 mkns
-cp target/x86_64-unknown-linux-musl/release/eshield /tmp/eshield-v5 && chmod +x /tmp/eshield-v5
+cp target/x86_64-unknown-linux-musl/release/xuanarmor /tmp/xuanarmor-v5 && chmod +x /tmp/xuanarmor-v5
 
 echo "=== 1) fragment_policy = drop ==="
 write_cfg ''
-sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "drop"|' /tmp/eshield-v5.toml
+sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "drop"|' /tmp/xuanarmor-v5.toml
 start_es || exit 1
 send_frags 3000
 sleep 1.6
@@ -155,7 +155,7 @@ write_cfg '[port_rate_limit]
 enabled = true
 threshold = 5
 tick_ms = 100'
-sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "rate_limit"|' /tmp/eshield-v5.toml
+sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "rate_limit"|' /tmp/xuanarmor-v5.toml
 start_es || exit 1
 send_frags 3000
 sleep 1.6
@@ -164,7 +164,7 @@ check "2" "$([ "$(num "$FB")" -gt 0 ] && echo 1 || echo 0)" "rate_limit 模式�
 
 echo "=== 3) fragment_policy = pass ==="
 write_cfg ''
-sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "pass"|' /tmp/eshield-v5.toml
+sed -i 's|^disable_offloads = true$|disable_offloads = true\nfragment_policy = "pass"|' /tmp/xuanarmor-v5.toml
 start_es || exit 1
 send_frags 1500
 sleep 1.6

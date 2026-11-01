@@ -26,17 +26,17 @@ if [ -z "${CARGO:-}" ]; then
         exit 1
     fi
 fi
-EBPF_TOOLCHAIN="${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
+EBPF_TOOLCHAIN="${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
 export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
+    "$CARGO" +"$EBPF_TOOLCHAIN" build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q
 fi
 
 NS_S="br-server"; NS_C="br-client"
-BIN=/tmp/eshield-br; CFG=/tmp/eshield-br.toml; STORE=/tmp/eshield-br.redb; LOG=/tmp/eshield-br.log
+BIN=/tmp/xuanarmor-br; CFG=/tmp/xuanarmor-br.toml; STORE=/tmp/xuanarmor-br.redb; LOG=/tmp/xuanarmor-br.log
 PORT=18722; API="http://127.0.0.1:${PORT}"; CLIENT_IP=10.12.0.2; SERVER_IP=10.12.0.1
 FAILS=0
 
@@ -47,18 +47,18 @@ unblock() { nsapi -o /dev/null -X DELETE -H 'Content-Type: application/json' -d 
 set_rl() { nsapi -o /dev/null -X PATCH -H 'Content-Type: application/json' -d "$1" "$API/api/config"; }
 
 cleanup() {
-    kill "$ESHIELD_PID" 2>/dev/null || true
-    wait "$ESHIELD_PID" 2>/dev/null || true
+    kill "$XUANARMOR_PID" 2>/dev/null || true
+    wait "$XUANARMOR_PID" 2>/dev/null || true
     ip netns del "$NS_C" 2>/dev/null || true
     ip netns del "$NS_S" 2>/dev/null || true
     rm -f "$BIN" "$CFG" "$STORE" "$LOG"
 }
 trap cleanup EXIT
 
-pkill -9 -f '^/tmp/eshield-br( |$)' 2>/dev/null || true
+pkill -9 -f '^/tmp/xuanarmor-br( |$)' 2>/dev/null || true
 ip netns del "$NS_C" 2>/dev/null || true
 ip netns del "$NS_S" 2>/dev/null || true
-cp target/x86_64-unknown-linux-musl/release/eshield "$BIN" && chmod +x "$BIN"
+cp target/x86_64-unknown-linux-musl/release/xuanarmor "$BIN" && chmod +x "$BIN"
 
 ip netns add "$NS_S"; ip netns add "$NS_C"
 ip link add veth-s type veth peer name veth-c
@@ -92,8 +92,8 @@ enabled = false
 TOML
 rm -f "$STORE"
 
-ip netns exec "$NS_S" env ESHIELD_XDP_MODE=skb "$BIN" start --config "$CFG" >"$LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$NS_S" env XUANARMOR_XDP_MODE=skb "$BIN" start --config "$CFG" >"$LOG" 2>&1 &
+XUANARMOR_PID=$!
 for _ in $(seq 1 40); do nsapi -sf "$API/ready" >/dev/null 2>&1 && break; sleep 0.25; done
 nsapi -sf "$API/api/stats" >/dev/null || { echo "FAIL: API not ready"; tail -20 "$LOG"; exit 1; }
 

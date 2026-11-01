@@ -6,20 +6,20 @@
 # 前置条件：
 #   1. 本地已打 tag 并推送到 origin：git push origin <TAG>
 #   2. 已设置 GH_TOKEN（Classic token，需要 repo 权限）
-#   3. 默认产物为 target/x86_64-unknown-linux-musl/release/eshield 和
-#      target/bpfel-unknown-none/release/eshield；也可通过 $env:ASSET_DIR 指定目录
+#   3. 默认产物为 target/x86_64-unknown-linux-musl/release/xuanarmor 和
+#      target/bpfel-unknown-none/release/xuanarmor；也可通过 $env:ASSET_DIR 指定目录
 
 $Repo = "BlkSword/XuanArmor"
-$VersionLine = Get-Content eshield/Cargo.toml | Select-String -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+$VersionLine = Get-Content xuanarmor/Cargo.toml | Select-String -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $VersionLine) {
-    Write-Host "错误：无法从 eshield/Cargo.toml 读取版本号" -ForegroundColor Red
+    Write-Host "错误：无法从 xuanarmor/Cargo.toml 读取版本号" -ForegroundColor Red
     exit 1
 }
 $Version = $VersionLine.Matches.Groups[1].Value
 $Tag = "v$Version"
 $DefaultAssets = @(
-    "target/x86_64-unknown-linux-musl/release/eshield",
-    "target/bpfel-unknown-none/release/eshield"
+    "target/x86_64-unknown-linux-musl/release/xuanarmor",
+    "target/bpfel-unknown-none/release/xuanarmor"
 )
 $AssetDir = $env:ASSET_DIR
 

@@ -28,7 +28,7 @@
 | 版本 | XuanArmor v0.4.6 |
 | 配置文件 | lab.toml |
 | 白名单 | `172.23.83.41/32` |
-| 认证 | `api_token = eshield-test` |
+| 认证 | `api_token = xuanarmor-test` |
 | 模块开关 | 按用例在运行时开启 / 关闭 |
 
 ### 2.3 环境限制

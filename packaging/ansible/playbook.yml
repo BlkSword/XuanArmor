@@ -1,11 +1,11 @@
 ---
 - name: Deploy XuanArmor
-  hosts: eshield_nodes
+  hosts: xuanarmor_nodes
   become: true
   vars:
-    eshield_version: "0.1.2"
-    eshield_interface: "eth0"
-    eshield_web_port: 8443
+    xuanarmor_version: "0.1.2"
+    xuanarmor_interface: "eth0"
+    xuanarmor_web_port: 8443
   tasks:
     - name: Ensure dependencies are installed
       ansible.builtin.package:
@@ -16,29 +16,29 @@
 
     - name: Download XuanArmor release binary
       ansible.builtin.get_url:
-        url: "https://github.com/eshield/eshield/releases/download/v{{ eshield_version }}/eshield-x86_64-unknown-linux-musl"
-        dest: /usr/local/bin/eshield
+        url: "https://github.com/xuanarmor/xuanarmor/releases/download/v{{ xuanarmor_version }}/xuanarmor-x86_64-unknown-linux-musl"
+        dest: /usr/local/bin/xuanarmor
         mode: "0755"
         owner: root
         group: root
 
     - name: Create config directory
       ansible.builtin.file:
-        path: /etc/eshield
+        path: /etc/xuanarmor
         state: directory
         mode: "0755"
 
     - name: Deploy config file
       ansible.builtin.template:
         src: config.toml.j2
-        dest: /etc/eshield/config.toml
+        dest: /etc/xuanarmor/config.toml
         mode: "0640"
       notify: Reload XuanArmor
 
     - name: Deploy systemd service
       ansible.builtin.template:
-        src: eshield.service.j2
-        dest: /lib/systemd/system/eshield.service
+        src: xuanarmor.service.j2
+        dest: /lib/systemd/system/xuanarmor.service
         mode: "0644"
       notify: Reload systemd
 
@@ -48,12 +48,12 @@
         state: directory
         mode: "0755"
       loop:
-        - /var/lib/eshield
-        - /var/log/eshield
+        - /var/lib/xuanarmor
+        - /var/log/xuanarmor
 
     - name: Enable and start XuanArmor
       ansible.builtin.systemd:
-        name: eshield
+        name: xuanarmor
         enabled: true
         state: started
         daemon_reload: true
@@ -65,5 +65,5 @@
 
     - name: Reload XuanArmor
       ansible.builtin.systemd:
-        name: eshield
+        name: xuanarmor
         state: reloaded

@@ -40,21 +40,21 @@ jobs:
           bpf-linker --version
 
       - name: Build eBPF
-        run: cargo +nightly-2026-07-31 build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
+        run: cargo +nightly-2026-07-31 build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
 
       - name: Build userspace
         run: |
-          cargo build --package eshield --target x86_64-unknown-linux-musl --release
-          cargo build --package eshield-hub --release
+          cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
+          cargo build --package xuanarmor-hub --release
 
       - name: Prepare release assets
         run: |
           mkdir -p dist
-          cp target/x86_64-unknown-linux-musl/release/eshield dist/eshield-x86_64-unknown-linux-musl
-          cp target/bpfel-unknown-none/release/eshield dist/eshield.bpf.o
-          cp target/release/eshield-hub dist/eshield-hub-x86_64-unknown-linux-gnu
-          chmod +x dist/eshield-x86_64-unknown-linux-musl dist/eshield-hub-x86_64-unknown-linux-gnu
-          (cd dist && sha256sum eshield-x86_64-unknown-linux-musl eshield-hub-x86_64-unknown-linux-gnu eshield.bpf.o > SHA256SUMS)
+          cp target/x86_64-unknown-linux-musl/release/xuanarmor dist/xuanarmor-x86_64-unknown-linux-musl
+          cp target/bpfel-unknown-none/release/xuanarmor dist/xuanarmor.bpf.o
+          cp target/release/xuanarmor-hub dist/xuanarmor-hub-x86_64-unknown-linux-gnu
+          chmod +x dist/xuanarmor-x86_64-unknown-linux-musl dist/xuanarmor-hub-x86_64-unknown-linux-gnu
+          (cd dist && sha256sum xuanarmor-x86_64-unknown-linux-musl xuanarmor-hub-x86_64-unknown-linux-gnu xuanarmor.bpf.o > SHA256SUMS)
           ls -lh dist/
 
       - name: Extract changelog section

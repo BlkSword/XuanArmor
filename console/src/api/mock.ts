@@ -109,7 +109,7 @@ export function makeMapUsage(): MapUsage {
 }
 
 export function makeAuditVerify(): AuditVerifyReport {
-  return { ok: true, enabled: true, checked: 60, first_bad_seq: null, path: '/var/log/eshield/audit.log' }
+  return { ok: true, enabled: true, checked: 60, first_bad_seq: null, path: '/var/log/xuanarmor/audit.log' }
 }
 
 export function makeAttackEvents(n = 120): AttackEvent[] {
@@ -238,24 +238,24 @@ export function makeModules(stats: Stats): ModuleState[] {
 
 export function makeConfig(): ConfigSnapshot {
   return {
-    version: '0.5.1', interface: 'eth0', log_level: 'info', web_bind: '0.0.0.0:8720',
-    store_path: '/var/lib/eshield/rules.redb', rate_limit_enabled: true,
+    version: '0.6.0', interface: 'eth0', log_level: 'info', web_bind: '0.0.0.0:8720',
+    store_path: '/var/lib/xuanarmor/rules.redb', rate_limit_enabled: true,
     syn_proxy_enabled: true, l7_scan_enabled: true, udp_flood_enabled: true,
     icmp_flood_enabled: true, geoip_enabled: false, geoip_default_action: 0,
     conn_track_enabled: false, conn_track_threshold: 100, conn_track_window_ms: 10000,
     trust_enabled: true, tcp_reset_on_drop: false, danger_level: 2,
     protection_projects_enabled: true,
     fragment_policy: 'rate_limit', rate_limit_block_mode: 'hard',
-    audit_path: '/var/log/eshield/audit.log', audit_enabled: true,
+    audit_path: '/var/log/xuanarmor/audit.log', audit_enabled: true,
     port_rate_limit: { enabled: true, threshold: 2000, tick_ms: 100 },
   }
 }
 
 export const hubNodes = [
-  { name: 'edge-sgp-01', ip: '172.23.83.42', version: '0.5.1', status: 'online', policies: 18, last_seen: '6s' },
-  { name: 'edge-hkg-02', ip: '172.23.83.41', version: '0.5.1', status: 'online', policies: 18, last_seen: '11s' },
+  { name: 'edge-sgp-01', ip: '172.23.83.42', version: '0.6.0', status: 'online', policies: 18, last_seen: '6s' },
+  { name: 'edge-hkg-02', ip: '172.23.83.41', version: '0.6.0', status: 'online', policies: 18, last_seen: '11s' },
   { name: 'edge-fra-03', ip: '10.8.0.14', version: '0.4.5', status: 'stale', policies: 12, last_seen: '4m' },
-  { name: 'edge-sfo-04', ip: '10.9.1.22', version: '0.5.1', status: 'online', policies: 21, last_seen: '9s' },
+  { name: 'edge-sfo-04', ip: '10.9.1.22', version: '0.6.0', status: 'online', policies: 21, last_seen: '9s' },
 ]
 
 export const threatFeeds = [

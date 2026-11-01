@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_NS="eshield-server"
-CLIENT_NS="eshield-client"
+SERVER_NS="xuanarmor-server"
+CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 CLIENT_IP="10.0.0.2"
 
 cleanup() {
     set +e
-    pkill -f "eshield -c /tmp/eshield-debug.toml" 2>/dev/null || true
+    pkill -f "xuanarmor -c /tmp/xuanarmor-debug.toml" 2>/dev/null || true
     pkill nginx 2>/dev/null || true
     ip netns del "$CLIENT_NS" 2>/dev/null || true
     ip netns del "$SERVER_NS" 2>/dev/null || true
@@ -29,7 +29,7 @@ ip netns exec "$SERVER_NS" ip link set lo up
 ip netns exec "$CLIENT_NS" ip link set lo up
 
 # Python HTTP server
-ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/eshield-debug-http.log 2>&1 &
+ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/xuanarmor-debug-http.log 2>&1 &
 import socketserver, http.server
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -39,13 +39,13 @@ with socketserver.ThreadingTCPServer(("10.0.0.1", 80), Handler) as httpd:
 PY
 sleep 1
 
-# eshield config
-cat > /tmp/eshield-debug.toml <<EOF
+# xuanarmor config
+cat > /tmp/xuanarmor-debug.toml <<EOF
 interface = "veth-server"
 web_bind = "0.0.0.0:8443"
 log_level = "info"
 ebpf_log_enabled = true
-store_path = "/tmp/eshield-debug.redb"
+store_path = "/tmp/xuanarmor-debug.redb"
 whitelist = ["${SERVER_IP}/32", "127.0.0.1/32"]
 blacklist = []
 udp_flood_enabled = false
@@ -58,10 +58,10 @@ enabled = false
 [adaptive]
 enabled = false
 EOF
-rm -f /tmp/eshield-debug.redb
+rm -f /tmp/xuanarmor-debug.redb
 
-ip netns exec "$SERVER_NS" /tmp/eshield-sync/target/x86_64-unknown-linux-musl/release/eshield start --config /tmp/eshield-debug.toml > /tmp/eshield-debug.log 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$SERVER_NS" /tmp/xuanarmor-sync/target/x86_64-unknown-linux-musl/release/xuanarmor start --config /tmp/xuanarmor-debug.toml > /tmp/xuanarmor-debug.log 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 echo "--- single curl to / ---"
@@ -77,7 +77,7 @@ echo "--- stats ---"
 ip netns exec "$SERVER_NS" curl -sS "http://127.0.0.1:8443/api/stats" | jq -c '{total_packets,total_dropped,total_passed,blacklist_blocked,rate_limited,syn_flood_blocked,udp_flood_blocked,icmp_flood_blocked,l7_blocked}' || true
 
 echo "--- log tail ---"
-tail -n 40 /tmp/eshield-debug.log
+tail -n 40 /tmp/xuanarmor-debug.log
 
-kill $ESHIELD_PID 2>/dev/null || true
-wait $ESHIELD_PID 2>/dev/null || true
+kill $XUANARMOR_PID 2>/dev/null || true
+wait $XUANARMOR_PID 2>/dev/null || true

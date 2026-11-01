@@ -1,24 +1,24 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: eshield
-  namespace: eshield
+  name: xuanarmor
+  namespace: xuanarmor
   labels:
-    app: eshield
+    app: xuanarmor
 spec:
   selector:
     matchLabels:
-      app: eshield
+      app: xuanarmor
   template:
     metadata:
       labels:
-        app: eshield
+        app: xuanarmor
     spec:
       hostNetwork: true
       hostPID: false
       containers:
-        - name: eshield
-          image: ghcr.io/eshield/eshield:v0.1.2
+        - name: xuanarmor
+          image: ghcr.io/xuanarmor/xuanarmor:v0.1.2
           imagePullPolicy: IfNotPresent
           securityContext:
             capabilities:
@@ -30,24 +30,24 @@ spec:
                 - IPC_LOCK
           volumeMounts:
             - name: config
-              mountPath: /etc/eshield
+              mountPath: /etc/xuanarmor
               readOnly: true
             - name: rules
-              mountPath: /var/lib/eshield
+              mountPath: /var/lib/xuanarmor
             - name: logs
-              mountPath: /var/log/eshield
+              mountPath: /var/log/xuanarmor
           ports:
             - containerPort: 8443
               hostPort: 8443
       volumes:
         - name: config
           configMap:
-            name: eshield-config
+            name: xuanarmor-config
         - name: rules
           hostPath:
-            path: /var/lib/eshield
+            path: /var/lib/xuanarmor
             type: DirectoryOrCreate
         - name: logs
           hostPath:
-            path: /var/log/eshield
+            path: /var/log/xuanarmor
             type: DirectoryOrCreate

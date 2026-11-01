@@ -3,8 +3,8 @@ set -e
 if [ "$EUID" -ne 0 ]; then echo "请使用 sudo"; exit 1; fi
 
 cleanup() {
-    kill $ESHIELD_PID 2>/dev/null || true
-    wait $ESHIELD_PID 2>/dev/null || true
+    kill $XUANARMOR_PID 2>/dev/null || true
+    wait $XUANARMOR_PID 2>/dev/null || true
     ip netns del es-dbg-c 2>/dev/null || true
     ip netns del es-dbg-s 2>/dev/null || true
     rm -f /tmp/es-dbg.toml /tmp/es-dbg.redb
@@ -41,8 +41,8 @@ block_duration_s = 60
 enabled = false
 EOF
 
-ip netns exec es-dbg-s ./target/x86_64-unknown-linux-musl/release/eshield start --config /tmp/es-dbg.toml >/tmp/es-dbg.log 2>&1 &
-ESHIELD_PID=$!
+ip netns exec es-dbg-s ./target/x86_64-unknown-linux-musl/release/xuanarmor start --config /tmp/es-dbg.toml >/tmp/es-dbg.log 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 echo "=== bpftool maps ==="

@@ -6,7 +6,7 @@ export const polls = ref(0)
 export const live = ref(false)
 export const danger = ref(0)
 
-const ROLE_KEY = 'eshield-role'
+const ROLE_KEY = 'xuanarmor-role'
 /** 角色只用于控制台展示（隐藏/提示写操作），服务端仍对只读令牌返回 403。 */
 function storedRole(): Role {
   try {
@@ -22,7 +22,7 @@ export const store = reactive({
   loading: true,
   lastUpdated: 0,
   autoRefresh: true,
-  theme: localStorage.getItem('eshield-theme') || 'system',
+  theme: localStorage.getItem('xuanarmor-theme') || 'system',
   /** 访问令牌角色（v0.5.0 RBAC-lite）：admin 可写，readonly 只读。 */
   role: storedRole(),
 })
@@ -74,7 +74,7 @@ export function initTheme() {
   const wanted = override === 'dark' || override === 'light' ? override : store.theme
   const resolved = wanted === 'system' ? (themeMedia?.matches ? 'dark' : 'light') : wanted
   document.documentElement.dataset.theme = resolved
-  window.dispatchEvent(new Event('eshield:theme'))
+  window.dispatchEvent(new Event('xuanarmor:theme'))
 }
 
 if (themeMedia) {
@@ -83,7 +83,7 @@ if (themeMedia) {
 }
 export function cycleTheme() {
   store.theme = store.theme === 'system' ? 'light' : store.theme === 'light' ? 'dark' : 'system'
-  localStorage.setItem('eshield-theme', store.theme)
+  localStorage.setItem('xuanarmor-theme', store.theme)
   initTheme()
 }
 

@@ -1,0 +1,33 @@
+[Unit]
+Description=XuanArmor - eBPF/XDP host-level L3-L4 DDoS shield
+Documentation=https://github.com/BlkSword/XuanArmor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/xuanarmor start --config /etc/xuanarmor/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+# 权限最小化：加载 eBPF 后仍保留必要 capability
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf
+# 自动创建数据/日志目录（systemd >= 235），避免 ReadWritePaths 指向不存在的路径
+StateDirectory=xuanarmor
+LogsDirectory=xuanarmor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

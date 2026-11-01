@@ -13,7 +13,7 @@ const defaultAction = ref<'pass' | 'drop'>('pass')
 const countries = ref('CN, SG')
 const allowCountries = ref('')
 const asns = ref('')
-const csvPath = ref('/etc/eshield/geoip.csv')
+const csvPath = ref('/etc/xuanarmor/geoip.csv')
 const loading = ref(false)
 
 const distribution = computed(() => [

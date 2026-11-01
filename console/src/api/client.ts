@@ -38,7 +38,7 @@ let mockModules = mock.makeModules(mock.makeStats())
 
 // -------------------------------------------------------------- normalizers
 const PROTO_NAMES: Record<number, string> = { 1: 'ICMP', 6: 'TCP', 17: 'UDP', 58: 'ICMP' }
-// 与 eshield-common::rules 的 rule_id 对齐；v0.5.0 新增 14/15。
+// 与 xuanarmor-common::rules 的 rule_id 对齐；v0.5.0 新增 14/15。
 const RULE_NAMES: Record<number, string> = {
   1: '黑名单', 2: '速率限制', 3: 'SYN Flood', 4: 'L7 指纹', 5: '自适应', 6: '手动封禁',
   7: '端口 ACL', 8: 'UDP Flood', 9: 'ICMP Flood', 10: 'GeoIP', 11: '威胁情报', 12: '防护项目',

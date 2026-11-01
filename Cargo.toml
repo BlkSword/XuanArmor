@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["eshield", "eshield-common", "eshield-ebpf", "eshield-hub", "xtask"]
+members = ["xuanarmor", "xuanarmor-common", "xuanarmor-ebpf", "xuanarmor-hub", "xtask"]
 
 [workspace.dependencies]
 aya = { version = "0.13.1", default-features = false }

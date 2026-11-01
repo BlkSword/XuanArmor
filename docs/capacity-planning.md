@@ -10,7 +10,7 @@
 
 - **已识别攻击（命中黑名单/端口聚合限速等快路径）很便宜**：generic XDP 下约 **75 ns/包**（DROP），
   全放行约 **92 ns/包**（PASS）。
-- **2 vCPU 防御机实测**：135k pps、540 万包、99.9% 由黑名单丢弃时，`eshield` 进程 CPU **5%（峰值 7%）**，
+- **2 vCPU 防御机实测**：135k pps、540 万包、99.9% 由黑名单丢弃时，`xuanarmor` 进程 CPU **5%（峰值 7%）**，
   系统繁忙 13%，load1 0.28，RSS 48MB，控制面 API 0.5ms——**2 vCPU 建议只承载 ≤150k pps 的
   "已识别"攻击**。
 - **未识别流量/混合流量成本更高**：每包要走完全部模块且可能要写黑名单/事件，建议 **≥4 vCPU + native XDP**。
@@ -31,7 +31,7 @@
 | XDP 模式 | generic（SKB） |
 | 网络环境 | netns + veth（本机回环，无物理网卡/中断开销） |
 | 打流工具 | `hping3`，打到该测试环境的吞吐上限 |
-| 观察方式 | `eshield` 进程 CPU%（单核百分比）、`ksoftirqd` CPU% |
+| 观察方式 | `xuanarmor` 进程 CPU%（单核百分比）、`ksoftirqd` CPU% |
 
 > 这是**纯数据面包处理**的净成本，不含物理网卡中断、业务进程、控制面统计同步。
 > 真实网卡场景请用第 3 节的两机数据规划。
@@ -43,7 +43,7 @@
 | 防御机 | 2 vCPU |
 | 攻击流量 | 135k pps、共 540 万包 |
 | 丢弃构成 | 99.9% 由黑名单命中丢弃 |
-| 观察指标 | `eshield` 进程 CPU、系统繁忙、load1、RSS、控制面 API 延迟 |
+| 观察指标 | `xuanarmor` 进程 CPU、系统繁忙、load1、RSS、控制面 API 延迟 |
 | 业务场景 | 正常 HTTP 请求（`python http.server`）与攻击并发 |
 
 ## 3. 实测数据
@@ -61,7 +61,7 @@
 | 指标 | 实测值 |
 |---|---:|
 | 吞吐 | 22 万 ~ 28 万 pps |
-| `eshield` 进程 CPU（4 vCPU 机器） | **2%**（按单核百分比计，与 92ns/包 自洽） |
+| `xuanarmor` 进程 CPU（4 vCPU 机器） | **2%**（按单核百分比计，与 92ns/包 自洽） |
 | `ksoftirqd` CPU | 1.4% ~ 1.8% |
 
 ### 3.2 真实两机网络（2 vCPU 防御机）
@@ -71,7 +71,7 @@
 | 攻击速率 | 135k pps |
 | 攻击总量 | 540 万包 |
 | 黑名单丢弃占比 | 99.9% |
-| `eshield` 进程 CPU | **5%（峰值 7%）** |
+| `xuanarmor` 进程 CPU | **5%（峰值 7%）** |
 | 系统繁忙（`vmstat` sy/us/si 合计） | 13% |
 | load1 | 0.28 |
 | 进程 RSS | **48MB** |
@@ -112,7 +112,7 @@
   成本显著更高（参见 3.1：PASS 92ns 高于 DROP 75ns）。
 - 如果机器同时跑 nginx/MySQL 等业务，请把业务内存与 CPU 单独计算，不要与上表叠加后压线。
 - `[limits].refuse_memory_mb`（默认 256）以下**拒绝启动**；`min_memory_mb`（默认 512）以下告警。
-  不建议用 `ESHIELD_ALLOW_LOW_MEMORY=1` 绕过。
+  不建议用 `XUANARMOR_ALLOW_LOW_MEMORY=1` 绕过。
 
 ## 5. 容量估算公式
 
@@ -185,7 +185,7 @@ LRU Hash 与 LPM Trie 等 map 在**创建时即按容量预分配**，与实际�
 
 | 项 | 实测/估算 |
 |---|---:|
-| `eshield` 进程 RSS（135k pps 攻击中） | **48 MB** |
+| `xuanarmor` 进程 RSS（135k pps 攻击中） | **48 MB** |
 | 静态二进制大小 | 约 8.7 MB（musl，含嵌入的 eBPF 与单文件控制台） |
 | redb 规则库 | 随持久化规则数量增长，通常 < 10 MB |
 | 审计日志 | 按 `[audit].max_size_mb` 轮转（默认 100MB，保留 3 份历史 `audit.log.1~.3`） |
@@ -200,7 +200,7 @@ LRU Hash 与 LPM Trie 等 map 在**创建时即按容量预分配**，与实际�
 curl -H "Authorization: Bearer <token>" http://<host>:8720/api/map-usage | jq
 
 # Prometheus 水位（0.8 为告警阈值）
-eshield_map_usage_ratio{name="BLACKLIST"} 0.23
+xuanarmor_map_usage_ratio{name="BLACKLIST"} 0.23
 ```
 
 达到容量的 80% 以上会开始出现 LRU 淘汰（黑名单/信誉条目被挤掉，防护效果下降），
@@ -278,9 +278,9 @@ fragment_policy = "rate_limit"  # 默认；依赖 [port_rate_limit].enabled = tr
 | 指标 | 建议动作 |
 |---|---|
 | `/ready` 非 200 | **最高优先级**：XDP 未挂载，流量裸奔 |
-| `eshield_map_usage_ratio > 0.8` | LRU 开始淘汰，下调阈值或扩容；见 operations.md 的告警规则 |
-| `eshield_port_rate_blocked_total` 持续增长 | 有伪造源/端口 Flood，确认阈值是否误伤业务 |
-| `eshield_fragment_blocked_total` 增长 | 存在分片攻击或业务 MTU 异常 |
+| `xuanarmor_map_usage_ratio > 0.8` | LRU 开始淘汰，下调阈值或扩容；见 operations.md 的告警规则 |
+| `xuanarmor_port_rate_blocked_total` 持续增长 | 有伪造源/端口 Flood，确认阈值是否误伤业务 |
+| `xuanarmor_fragment_blocked_total` 增长 | 存在分片攻击或业务 MTU 异常 |
 | `port_rate_blocked` / `rate_limited` 突增 | 误封风险，检查是否需 soft 模式或调大阈值 |
 | `ksoftirqd` CPU 持续高 | 已接近本机处理上限，考虑 native XDP/加核/上游清洗 |
 
@@ -295,7 +295,7 @@ sudo SKIP_BUILD=1 DURATION=60 SATURATE=10000 bash tests/stress_local.sh
 
 # 3. 攻击期观察
 watch -n1 'curl -s localhost:8720/api/stats | jq "{pps:.current_pps,dps:.current_dps,port_rate:.port_rate_blocked,frag:.fragment_blocked}"'
-watch -n1 'ps -o pid,pcpu,rss,comm -C eshield'
+watch -n1 'ps -o pid,pcpu,rss,comm -C xuanarmor'
 ```
 
 ## 8. 相关文档

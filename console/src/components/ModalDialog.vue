@@ -47,7 +47,7 @@ async function save() {
     } else if (modal.kind === 'project') {
       toast('防护项目已保存', form.name, 'ok')
     }
-    window.dispatchEvent(new CustomEvent('eshield:saved', { detail: modal.kind }))
+    window.dispatchEvent(new CustomEvent('xuanarmor:saved', { detail: modal.kind }))
     closeModal()
   } catch (e) {
     toast('操作失败', String(e), 'danger')

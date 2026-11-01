@@ -1,7 +1,7 @@
 # XuanArmor Console
 
 XuanArmor 控制台前端工程。Vue 3 + TypeScript + Vite，构建产物是**单文件 HTML**，
-由 `eshield/src/web.rs` 通过 `include_str!("../web/app.html")` 嵌入二进制。
+由 `xuanarmor/src/web.rs` 通过 `include_str!("../web/app.html")` 嵌入二进制。
 
 ## 技术选型
 
@@ -61,17 +61,17 @@ npm run dev        # 本地开发（file 协议或接口不可达时自动使用
 npm run build      # vue-tsc 类型检查 + 产物 dist/index.html
 ```
 
-构建后同步到 Rust 侧（页面会内嵌进 `eshield` 二进制）：
+构建后同步到 Rust 侧（页面会内嵌进 `xuanarmor` 二进制）：
 
 ```bash
-cp console/dist/index.html eshield/web/app.html
+cp console/dist/index.html xuanarmor/web/app.html
 ```
 
 ## 数据模式
 
 `src/api/client.ts` 自动判断：
 
-- 通过 XuanArmor 服务访问（http/https）：调用真实 `/api/*`，登录态用 `eshield-token`
+- 通过 XuanArmor 服务访问（http/https）：调用真实 `/api/*`，登录态用 `xuanarmor-token`
   Cookie 或 `Authorization: Bearer`；
 - 直接打开 `dist/index.html`（file://）或接口不可达：回退到 `mock.ts` 的样例数据，
   顶栏显示「演示数据」；

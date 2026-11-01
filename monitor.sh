@@ -1,5 +1,5 @@
 #!/bin/bash
-API="curl -s -m 3 -H 'Authorization: Bearer eshield-demo-2024'"
+API="curl -s -m 3 -H 'Authorization: Bearer xuanarmor-demo-2024'"
 echo 'timestamp,total_packets,total_dropped,blacklist_blocked,rate_limited,current_pps,current_dps,attack_events'
 for i in $(seq 1 60); do
   ts=$(date +%s)

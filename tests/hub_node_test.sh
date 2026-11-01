@@ -18,27 +18,27 @@ if [ -z "${CARGO:-}" ]; then
         exit 1
     fi
 fi
-EBPF_TOOLCHAIN="${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
+EBPF_TOOLCHAIN="${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
 export PATH="$(dirname "$CARGO"):$PATH"
 
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
     echo "=== Building XuanArmor + Hub ==="
-    "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
-    "$CARGO" build --package eshield-hub --release -q
+    "$CARGO" +"$EBPF_TOOLCHAIN" build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q
+    "$CARGO" build --package xuanarmor-hub --release -q
 fi
 
 # 只清理本测试使用的 /tmp 二进制对应进程，避免误伤宿主机上的生产实例
-pkill -9 -f '^/tmp/eshield( |$)' 2>/dev/null || true
-pkill -9 -f '^/tmp/eshield-hub( |$)' 2>/dev/null || true
+pkill -9 -f '^/tmp/xuanarmor( |$)' 2>/dev/null || true
+pkill -9 -f '^/tmp/xuanarmor-hub( |$)' 2>/dev/null || true
 sleep 0.5
 
-rm -f /tmp/eshield /tmp/eshield.ebpf /tmp/eshield-hub
-cp "target/x86_64-unknown-linux-musl/release/eshield" /tmp/eshield
-cp "target/bpfel-unknown-none/release/eshield" /tmp/eshield.ebpf
-cp "target/release/eshield-hub" /tmp/eshield-hub
+rm -f /tmp/xuanarmor /tmp/xuanarmor.ebpf /tmp/xuanarmor-hub
+cp "target/x86_64-unknown-linux-musl/release/xuanarmor" /tmp/xuanarmor
+cp "target/bpfel-unknown-none/release/xuanarmor" /tmp/xuanarmor.ebpf
+cp "target/release/xuanarmor-hub" /tmp/xuanarmor-hub
 
 HUB_TOKEN="hub-token"
 NODE_TOKEN="node-token"
@@ -56,10 +56,10 @@ echo "test-node:$NODE_TOKEN" > "$NODE_TOKENS"
 
 TEST_PASSED=0
 cleanup() {
-    kill $ESHIELD_PID $HUB_PID 2>/dev/null || true
-    wait $ESHIELD_PID $HUB_PID 2>/dev/null || true
-    ip netns del eshield-client 2>/dev/null || true
-    ip netns del eshield-server 2>/dev/null || true
+    kill $XUANARMOR_PID $HUB_PID 2>/dev/null || true
+    wait $XUANARMOR_PID $HUB_PID 2>/dev/null || true
+    ip netns del xuanarmor-client 2>/dev/null || true
+    ip netns del xuanarmor-server 2>/dev/null || true
     ip link del veth-server 2>/dev/null || true
     if [ "$TEST_PASSED" -eq 1 ]; then
         rm -f "$HUB_STORE" "$NODE_STORE" "$HUB_LOG" "$NODE_LOG" "$CFG" "$NODE_TOKENS"
@@ -69,24 +69,24 @@ cleanup() {
 }
 trap cleanup EXIT
 
-ip netns del eshield-client 2>/dev/null || true
-ip netns del eshield-server 2>/dev/null || true
+ip netns del xuanarmor-client 2>/dev/null || true
+ip netns del xuanarmor-server 2>/dev/null || true
 ip link del veth-server 2>/dev/null || true
 
-ip netns add eshield-server
-ip netns add eshield-client
+ip netns add xuanarmor-server
+ip netns add xuanarmor-client
 ip link add veth-server type veth peer name veth-client
-ip link set veth-server netns eshield-server
-ip link set veth-client netns eshield-client
-ip -n eshield-server addr add 10.0.0.1/24 dev veth-server
-ip -n eshield-client addr add 10.0.0.2/24 dev veth-client
-ip -n eshield-server link set veth-server up
-ip -n eshield-client link set veth-client up
-ip -n eshield-server link set lo up
-ip -n eshield-client link set lo up
+ip link set veth-server netns xuanarmor-server
+ip link set veth-client netns xuanarmor-client
+ip -n xuanarmor-server addr add 10.0.0.1/24 dev veth-server
+ip -n xuanarmor-client addr add 10.0.0.2/24 dev veth-client
+ip -n xuanarmor-server link set veth-server up
+ip -n xuanarmor-client link set veth-client up
+ip -n xuanarmor-server link set lo up
+ip -n xuanarmor-client link set lo up
 
 # extra source IP for peer-policy test
-ip -n eshield-client addr add 10.0.0.3/24 dev veth-client
+ip -n xuanarmor-client addr add 10.0.0.3/24 dev veth-client
 
 cat > "$CFG" <<EOF
 interface = "veth-server"
@@ -124,7 +124,7 @@ enabled = false
 EOF
 
 echo "=== Starting Hub ==="
-ip netns exec eshield-server /tmp/eshield-hub \
+ip netns exec xuanarmor-server /tmp/xuanarmor-hub \
     --bind 0.0.0.0:9930 \
     --token "$HUB_TOKEN" \
     --node-tokens-file "$NODE_TOKENS" \
@@ -133,8 +133,8 @@ HUB_PID=$!
 sleep 1
 
 echo "=== Starting XuanArmor node ==="
-ip netns exec eshield-server /tmp/eshield start --config "$CFG" > "$NODE_LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec xuanarmor-server /tmp/xuanarmor start --config "$CFG" > "$NODE_LOG" 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 wait_for() {
@@ -155,13 +155,13 @@ wait_for() {
 hub_curl() {
     local path="$1"
     shift
-    ip netns exec eshield-server curl -s -H "Authorization: Bearer $HUB_TOKEN" "$@" "http://10.0.0.1:9930$path"
+    ip netns exec xuanarmor-server curl -s -H "Authorization: Bearer $HUB_TOKEN" "$@" "http://10.0.0.1:9930$path"
 }
 
 node_curl() {
     local path="$1"
     shift
-    ip netns exec eshield-server curl -s -H "Authorization: Bearer $NODE_TOKEN" "$@" "http://10.0.0.1:8720$path"
+    ip netns exec xuanarmor-server curl -s -H "Authorization: Bearer $NODE_TOKEN" "$@" "http://10.0.0.1:8720$path"
 }
 
 proxy_curl() {
@@ -179,13 +179,13 @@ wait_for "node registered on hub" 10 "hub_curl /api/v1/nodes | jq -e '.nodes[] |
 hub_curl /api/v1/nodes | jq .
 
 echo "=== Test H3: local rate-limit block is pushed to Hub ==="
-if ! ip netns exec eshield-client ping -c 1 -W 2 10.0.0.1 >/dev/null 2>&1; then
+if ! ip netns exec xuanarmor-client ping -c 1 -W 2 10.0.0.1 >/dev/null 2>&1; then
     echo "FAIL: baseline ping failed"
     exit 1
 fi
-ip netns exec eshield-client ping -c 20 -i 0.001 -W 2 10.0.0.1 >/dev/null 2>&1 || true
+ip netns exec xuanarmor-client ping -c 20 -i 0.001 -W 2 10.0.0.1 >/dev/null 2>&1 || true
 sleep 1
-if ip netns exec eshield-client ping -c 2 -W 2 10.0.0.1 >/dev/null 2>&1; then
+if ip netns exec xuanarmor-client ping -c 2 -W 2 10.0.0.1 >/dev/null 2>&1; then
     echo "FAIL: rate limit did not block 10.0.0.2"
     exit 1
 fi
@@ -202,14 +202,14 @@ PEER_IP='{"family":4,"addr":[0,0,0,0,0,0,0,0,0,0,0,0,10,0,0,3],"padding":[0,0,0,
 hub_curl /api/v1/policies -X POST -H "Content-Type: application/json" -d "{\"node_name\":\"peer-node\",\"policies\":[{\"ip\":$PEER_IP,\"reason\":2,\"hit_count\":100,\"trust_score\":0,\"blocked_until_ns\":0,\"ttl_s\":300}]}" | jq .
 
 echo "waiting for node to pull peer policy..."
-wait_for "10.0.0.3 blocked by node" 10 "! ip netns exec eshield-client ping -c 1 -W 2 -I 10.0.0.3 10.0.0.1 >/dev/null 2>&1"
+wait_for "10.0.0.3 blocked by node" 10 "! ip netns exec xuanarmor-client ping -c 1 -W 2 -I 10.0.0.3 10.0.0.1 >/dev/null 2>&1"
 echo "PASS: peer policy blocked 10.0.0.3"
 
 echo "=== Test H6: Hub DELETE unblocks peer policy on node ==="
 hub_curl /api/v1/policies -X DELETE -H "Content-Type: application/json" -d "{\"node_name\":\"admin\",\"ips\":[$PEER_IP]}" | jq .
 
 echo "waiting for tombstone to propagate..."
-wait_for "10.0.0.3 unblocked" 10 "ip netns exec eshield-client ping -c 1 -W 2 -I 10.0.0.3 10.0.0.1 >/dev/null 2>&1"
+wait_for "10.0.0.3 unblocked" 10 "ip netns exec xuanarmor-client ping -c 1 -W 2 -I 10.0.0.3 10.0.0.1 >/dev/null 2>&1"
 echo "PASS: Hub delete unblocked 10.0.0.3"
 
 echo "=== Test H7: Hub rules (ACL/L7/projects) sync to node ==="

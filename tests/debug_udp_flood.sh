@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_NS="eshield-server"
-CLIENT_NS="eshield-client"
+SERVER_NS="xuanarmor-server"
+CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 CLIENT_IP="10.0.0.2"
 
 cleanup() {
     set +e
-    pkill -f "eshield start --config /tmp/eshield-udp.toml" 2>/dev/null || true
+    pkill -f "xuanarmor start --config /tmp/xuanarmor-udp.toml" 2>/dev/null || true
     pkill -f 'python3 - <<PY' 2>/dev/null || true
     ip netns del "$CLIENT_NS" 2>/dev/null || true
     ip netns del "$SERVER_NS" 2>/dev/null || true
@@ -27,7 +27,7 @@ ip netns exec "$CLIENT_NS" ip link set veth-client up
 ip netns exec "$SERVER_NS" ip link set lo up
 ip netns exec "$CLIENT_NS" ip link set lo up
 
-ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/eshield-udp-http.log 2>&1 &
+ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/xuanarmor-udp-http.log 2>&1 &
 import socketserver, http.server
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -37,11 +37,11 @@ with socketserver.ThreadingTCPServer(("10.0.0.1", 80), Handler) as httpd:
 PY
 sleep 1
 
-cat > /tmp/eshield-udp.toml <<EOF
+cat > /tmp/xuanarmor-udp.toml <<EOF
 interface = "veth-server"
 web_bind = "0.0.0.0:8443"
 log_level = "info"
-store_path = "/tmp/eshield-udp.redb"
+store_path = "/tmp/xuanarmor-udp.redb"
 whitelist = ["${SERVER_IP}/32", "127.0.0.1/32"]
 blacklist = []
 udp_flood_enabled = true
@@ -56,10 +56,10 @@ threshold = 100
 enabled = false
 
 EOF
-rm -f /tmp/eshield-udp.redb
+rm -f /tmp/xuanarmor-udp.redb
 
-ip netns exec "$SERVER_NS" /tmp/eshield-sync/target/x86_64-unknown-linux-musl/release/eshield start --config /tmp/eshield-udp.toml >/tmp/eshield-udp.log 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$SERVER_NS" /tmp/xuanarmor-sync/target/x86_64-unknown-linux-musl/release/xuanarmor start --config /tmp/xuanarmor-udp.toml >/tmp/xuanarmor-udp.log 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 echo "--- config ---"
@@ -75,5 +75,5 @@ sleep 2
 echo "--- after ---"
 ip netns exec "$SERVER_NS" curl -sS "http://127.0.0.1:8443/api/stats" | jq -c '{total_dropped, udp_flood_blocked, icmp_flood_blocked, blacklist_blocked}' || true
 
-kill $ESHIELD_PID 2>/dev/null || true
-wait $ESHIELD_PID 2>/dev/null || true
+kill $XUANARMOR_PID 2>/dev/null || true
+wait $XUANARMOR_PID 2>/dev/null || true

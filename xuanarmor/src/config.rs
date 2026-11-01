@@ -1,0 +1,1315 @@
+use anyhow::Context;
+use xuanarmor_common::{IpKey, PortAclEntry};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::Path;
+
+/// 黑名单条目的来源，用于区分本地生成与 Hub 下发，避免策略回环。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlockOrigin {
+    Local,
+    #[default]
+    Api,
+    Adaptive,
+    ThreatIntel,
+    Hub,
+}
+
+impl BlockOrigin {
+    /// 是否允许向 Hub 上报该来源的策略。
+    pub fn publishable(&self) -> bool {
+        matches!(
+            self,
+            BlockOrigin::Local
+                | BlockOrigin::Api
+                | BlockOrigin::Adaptive
+                | BlockOrigin::ThreatIntel
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct Config {
+    pub interface: String,
+    #[allow(dead_code)]
+    pub whitelist: Vec<String>,
+    pub blacklist: Vec<String>,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    #[serde(default = "default_false")]
+    pub ebpf_log_enabled: bool,
+    #[serde(default = "default_false")]
+    pub udp_flood_enabled: bool,
+    #[serde(default = "default_false")]
+    pub icmp_flood_enabled: bool,
+    #[serde(default = "default_false")]
+    pub tcp_reset_on_drop: bool,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub port_rate_limit: PortRateLimitConfig,
+    #[serde(default)]
+    pub syn_proxy: SynProxyConfig,
+    #[serde(default)]
+    pub l7_scan: L7ScanConfig,
+    #[serde(default)]
+    pub adaptive: AdaptiveConfig,
+    #[serde(default)]
+    pub port_acl: Vec<PortAclItem>,
+    #[serde(default)]
+    pub protection_projects: Vec<ProtectionProject>,
+    #[serde(default)]
+    pub geoip: GeoIpConfig,
+    #[serde(default)]
+    pub threat_intel: ThreatIntelConfig,
+    #[serde(default = "default_web_port")]
+    pub web_port: u16,
+    #[serde(default)]
+    pub web_bind: Option<String>,
+    #[serde(default)]
+    pub api_token: Option<String>,
+    /// 只读 Token（v0.5.0）：仅允许 GET/HEAD，适合监控系统 / 只读大屏。
+    /// 留空表示不启用只读角色。
+    #[serde(default)]
+    pub readonly_token: Option<String>,
+    #[serde(default = "default_false")]
+    pub log_json: bool,
+    #[serde(default = "default_store_path")]
+    pub store_path: String,
+    #[serde(default = "default_timeseries_retention_days")]
+    pub timeseries_retention_days: u64,
+    /// eBPF map 条目数采样周期（秒）。/metrics 只读该缓存，不做实时遍历。
+    #[serde(default = "default_metrics_interval_s")]
+    pub metrics_interval_s: u64,
+    #[serde(default)]
+    pub alert_webhook_url: Option<String>,
+    #[serde(default = "default_alert_webhook_type")]
+    pub alert_webhook_type: String,
+    #[serde(default = "default_alert_threshold_dps")]
+    pub alert_threshold_dps: u64,
+    #[serde(default = "default_alert_cooldown_s")]
+    pub alert_cooldown_s: u64,
+    #[serde(default)]
+    pub audit: AuditConfig,
+    #[serde(default)]
+    pub trust_score: TrustScoreConfig,
+    #[serde(default)]
+    pub danger_signal: DangerSignalConfig,
+    #[serde(default)]
+    pub conn_track: ConnTrackConfig,
+    #[serde(default)]
+    pub hub: HubConfig,
+    #[serde(default)]
+    pub packet_log: PacketLogConfig,
+    /// XDP 挂载策略（v0.4.8）
+    #[serde(default)]
+    pub xdp: XdpConfig,
+    /// 启动资源预检（v0.5.0）
+    #[serde(default)]
+    pub limits: LimitsConfig,
+}
+
+/// XDP 挂载策略。
+///
+/// 背景：`virtio_net` 在宿主机开启 GRO_HW/CSUM 时会拒绝 native XDP，此时只能跑
+/// SKB generic（性能差数倍）。v0.4.8 之前这里静默回退，运维无从得知；现在：
+/// - `mode` 显式声明期望模式，`native` 失败直接报错退出而不是悄悄降级；
+/// - 挂载状态由后台巡检维护，被摘掉时 `/ready` 返回 503 并自动重挂。
+#[derive(Debug, Clone, Deserialize)]
+pub struct XdpConfig {
+    /// auto（native 优先，失败回退 generic，默认）| native（失败即报错退出）| generic（强制 SKB）
+    #[serde(default = "default_xdp_mode")]
+    pub mode: String,
+    /// native 失败时是否尝试关闭 virtio_net 的 rx-gro-hw / tx-checksum 后重试一次
+    #[serde(default = "default_true")]
+    pub disable_offloads: bool,
+    /// 周期性校验挂载状态，被驱动重置/外部操作摘掉时自动重新挂载
+    #[serde(default = "default_true")]
+    pub auto_reattach: bool,
+    /// 非首片 IPv4 分片的处理策略（v0.5.0）：
+    /// - `rate_limit`（默认）：按「协议 + 0 端口」聚合限速，超阈值丢弃。伪造源 IP 的分片
+    ///   SYN/UDP 攻击无法被 per-IP 计数识别，必须靠端口/协议维度兜底；
+    /// - `drop`：直接丢弃所有非首片分片（最严格，可能影响合法大包路径 MTU 发现）；
+    /// - `pass`：跳过 L4 模块直接放行（v0.4.x 兼容行为，不推荐）。
+    #[serde(default = "default_fragment_policy")]
+    pub fragment_policy: String,
+    /// 平滑升级（v0.5.1）：进程退出时**不摘除** XDP 程序（fail-closed）。
+    /// 旧程序会继续过滤流量，新进程启动时由内核原子替换，从而实现升级期间数据面零空窗。
+    /// 需要显式卸载时使用 `xuanarmor detach`；设为 false 则恢复"退出即卸载"的旧行为。
+    #[serde(default = "default_true")]
+    pub persist_link: bool,
+    /// bpffs 挂载目录（默认 /sys/fs/bpf）：pinned link 以 `xuanarmor_xdp_link` 文件名放在这里。
+    #[serde(default = "default_pin_path")]
+    pub pin_path: String,
+}
+
+impl Default for XdpConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_xdp_mode(),
+            disable_offloads: true,
+            auto_reattach: true,
+            fragment_policy: default_fragment_policy(),
+            persist_link: true,
+            pin_path: default_pin_path(),
+        }
+    }
+}
+
+fn default_xdp_mode() -> String {
+    "auto".to_string()
+}
+
+fn default_pin_path() -> String {
+    "/sys/fs/bpf".to_string()
+}
+
+fn default_fragment_policy() -> String {
+    // v0.5.0：默认从「跳过 L4 模块」改为「按协议聚合限速」——
+    // 实测伪造源 SYN/UDP 分片流量在 v0.4.x 会整段放行，属于明确的绕过面。
+    "rate_limit".to_string()
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
+}
+
+fn default_web_port() -> u16 {
+    8720
+}
+
+fn default_store_path() -> String {
+    "/var/lib/xuanarmor/rules.redb".to_string()
+}
+
+fn default_timeseries_retention_days() -> u64 {
+    30
+}
+
+fn default_metrics_interval_s() -> u64 {
+    30
+}
+
+fn default_alert_webhook_type() -> String {
+    "generic".to_string()
+}
+
+fn default_alert_threshold_dps() -> u64 {
+    1000
+}
+
+fn default_alert_cooldown_s() -> u64 {
+    60
+}
+
+/// 审计日志持久化配置。
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuditConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_audit_path")]
+    pub path: String,
+    #[serde(default = "default_audit_max_size_mb")]
+    pub max_size_mb: u64,
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: default_audit_path(),
+            max_size_mb: default_audit_max_size_mb(),
+        }
+    }
+}
+
+fn default_audit_path() -> String {
+    "/var/log/xuanarmor/audit.log".to_string()
+}
+
+fn default_audit_max_size_mb() -> u64 {
+    100
+}
+
+/// Trust Score 配置（v0.4.0）
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct TrustScoreConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_trust_add_divisor")]
+    pub add_divisor: u32,
+    #[serde(default = "default_trust_sub_divisor")]
+    pub sub_divisor: u32,
+}
+
+impl Default for TrustScoreConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            add_divisor: 100,
+            sub_divisor: 3,
+        }
+    }
+}
+fn default_trust_add_divisor() -> u32 {
+    100
+}
+fn default_trust_sub_divisor() -> u32 {
+    3
+}
+
+/// Danger Signal 配置（v0.4.0）
+#[derive(Debug, Clone, Deserialize)]
+pub struct DangerSignalConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_danger_sample_s")]
+    pub sample_interval_s: u64,
+    #[serde(default = "default_danger_anomaly_multiplier")]
+    pub anomaly_multiplier: f64,
+}
+
+impl Default for DangerSignalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sample_interval_s: 5,
+            anomaly_multiplier: 2.0,
+        }
+    }
+}
+fn default_danger_sample_s() -> u64 {
+    5
+}
+fn default_danger_anomaly_multiplier() -> f64 {
+    2.0
+}
+
+/// 可选连接跟踪 / 半连接 CC 防御配置（默认关闭）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConnTrackConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    /// 单源窗口内未完成握手 SYN 数阈值
+    #[serde(default = "default_conn_track_threshold")]
+    pub threshold: u32,
+    /// 统计窗口（ms）
+    #[serde(default = "default_conn_track_window_ms")]
+    pub window_ms: u64,
+}
+
+impl Default for ConnTrackConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: default_conn_track_threshold(),
+            window_ms: default_conn_track_window_ms(),
+        }
+    }
+}
+
+fn default_conn_track_threshold() -> u32 {
+    20
+}
+
+fn default_conn_track_window_ms() -> u64 {
+    10_000
+}
+
+/// Hub 分布式同步配置（v0.4.2）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub urls: Vec<String>,
+    #[serde(default)]
+    pub node_name: String,
+    #[serde(default)]
+    pub token: String,
+    #[serde(default = "default_hub_pull_interval_s")]
+    pub sync_pull_interval_s: u64,
+    #[serde(default = "default_hub_push_interval_s")]
+    pub sync_push_interval_s: u64,
+    #[serde(default = "default_hub_push_min_hit_count")]
+    pub push_min_hit_count: u32,
+    #[serde(default = "default_hub_push_min_trust")]
+    pub push_min_trust: u32,
+    #[serde(default = "default_hub_push_max_batch_size")]
+    pub push_max_batch_size: usize,
+    #[serde(default = "default_false")]
+    pub sync_rules_enabled: bool,
+    #[serde(default = "default_hub_sync_rules_interval_s")]
+    pub sync_rules_interval_s: u64,
+    #[serde(default)]
+    pub tls: HubTlsConfig,
+}
+
+impl Default for HubConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            urls: Vec::new(),
+            node_name: String::new(),
+            token: String::new(),
+            sync_pull_interval_s: default_hub_pull_interval_s(),
+            sync_push_interval_s: default_hub_push_interval_s(),
+            push_min_hit_count: default_hub_push_min_hit_count(),
+            push_min_trust: default_hub_push_min_trust(),
+            push_max_batch_size: default_hub_push_max_batch_size(),
+            sync_rules_enabled: false,
+            sync_rules_interval_s: default_hub_sync_rules_interval_s(),
+            tls: HubTlsConfig::default(),
+        }
+    }
+}
+
+/// 采样包日志配置（v0.4.2）
+#[derive(Debug, Clone, Deserialize)]
+pub struct PacketLogConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default = "default_packet_log_sample_rate")]
+    pub sample_rate: u16,
+    #[serde(default = "default_packet_log_memory_max_entries")]
+    pub memory_max_entries: usize,
+    /// 是否在前端展示 payload 十六进制（当前默认开启，保留供后续细粒度控制）
+    #[serde(default = "default_true")]
+    #[allow(dead_code)]
+    pub payload_hex: bool,
+}
+
+impl Default for PacketLogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            sample_rate: default_packet_log_sample_rate(),
+            memory_max_entries: default_packet_log_memory_max_entries(),
+            payload_hex: true,
+        }
+    }
+}
+
+fn default_packet_log_sample_rate() -> u16 {
+    10000
+}
+
+fn default_packet_log_memory_max_entries() -> usize {
+    50000
+}
+
+fn default_hub_pull_interval_s() -> u64 {
+    10
+}
+fn default_hub_push_interval_s() -> u64 {
+    5
+}
+fn default_hub_push_min_hit_count() -> u32 {
+    10
+}
+fn default_hub_push_min_trust() -> u32 {
+    100
+}
+fn default_hub_push_max_batch_size() -> usize {
+    100
+}
+fn default_hub_sync_rules_interval_s() -> u64 {
+    30
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HubTlsConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub ca_cert: Option<String>,
+    pub client_cert: Option<String>,
+    pub client_key: Option<String>,
+    #[serde(default = "default_true")]
+    pub verify: bool,
+}
+
+impl Default for HubTlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ca_cert: None,
+            client_cert: None,
+            client_key: None,
+            verify: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortAclItem {
+    pub protocol: String,
+    pub dport: String,
+    pub action: String,
+}
+
+/// 防护项目：按协议 + 端口 + 可选目标 IP 绑定一组防御策略。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProtectionProject {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub protocol: String,
+    pub dport: String,
+    #[serde(default)]
+    pub target_ips: Vec<String>,
+    #[serde(default)]
+    pub enabled_modules: Vec<String>,
+    #[serde(default = "default_project_action")]
+    pub action: String,
+}
+
+fn default_project_action() -> String {
+    "defend".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeoIpConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    /// MaxMind/MMDB 数据库路径（预留，当前优先使用 CSV）
+    pub db_path: Option<String>,
+    /// 自定义国家/地区 CSV：`network,country_iso`（支持 IPv4/IPv6 CIDR）
+    pub country_blocks_csv: Option<String>,
+    /// 自定义 ASN CSV：`network,asn,asn_org`（支持 IPv4/IPv6 CIDR）
+    pub asn_blocks_csv: Option<String>,
+    #[serde(default)]
+    pub block_countries: Vec<String>,
+    #[serde(default)]
+    pub allow_countries: Vec<String>,
+    #[serde(default)]
+    pub block_asns: Vec<u32>,
+    #[serde(default)]
+    pub allow_asns: Vec<u32>,
+    #[serde(default = "default_geoip_action")]
+    pub default_action: String,
+}
+
+fn default_geoip_action() -> String {
+    "pass".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ThreatIntelConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub feeds: Vec<ThreatFeed>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreatFeed {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_feed_interval_s")]
+    pub interval_s: u64,
+    #[serde(default = "default_feed_confidence")]
+    pub confidence: u8,
+    pub category: Option<String>,
+    #[serde(default = "default_feed_action")]
+    pub action: String,
+}
+
+fn default_feed_interval_s() -> u64 {
+    3600
+}
+
+fn default_feed_confidence() -> u8 {
+    80
+}
+
+fn default_feed_action() -> String {
+    "drop".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdaptiveConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_adaptive_threshold")]
+    pub threshold: u64,
+    #[serde(default = "default_adaptive_window_s")]
+    pub window_s: u64,
+    #[serde(default = "default_adaptive_block_duration_s")]
+    pub block_duration_s: u64,
+}
+
+impl Default for AdaptiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 10,
+            window_s: 5,
+            block_duration_s: 300,
+        }
+    }
+}
+
+fn default_adaptive_threshold() -> u64 {
+    10
+}
+fn default_adaptive_window_s() -> u64 {
+    5
+}
+fn default_adaptive_block_duration_s() -> u64 {
+    300
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SynProxyConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct L7ScanConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub patterns: Vec<L7PatternConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L7PatternConfig {
+    pub pattern: String,
+    #[serde(default)]
+    pub mask: Option<String>,
+}
+
+fn default_false() -> bool {
+    false
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_threshold")]
+    pub threshold: u64,
+    #[serde(default = "default_tick_ms")]
+    pub tick_ms: u64,
+    #[serde(default = "default_decay_num")]
+    pub decay_num: u64,
+    #[serde(default = "default_decay_den")]
+    pub decay_den: u64,
+    #[serde(default = "default_block_duration_s")]
+    pub block_duration_s: u64,
+    /// 计数维度：false=按源 IP 合计（默认）；true=按 源IP+目的端口 分组，
+    /// 适合 NAT / 单 IP 多业务端口场景，避免不同业务共享一个计数器互相挤占额度。
+    #[serde(default)]
+    pub dport_grouping: bool,
+    /// 超限后的处置模式（v0.5.0）：
+    /// - `hard`（默认）：写入黑名单，后续包在 XDP 黑名单快路径丢弃；
+    /// - `soft`：只丢弃超限包，不写黑名单，流量回落后自动恢复。
+    ///   NAT 出口 / 共享代理 IP 场景建议 soft，避免整段出口被误封。
+    #[serde(default = "default_block_mode")]
+    pub block_mode: String,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 2000,
+            tick_ms: 100,
+            decay_num: 7,
+            decay_den: 8,
+            block_duration_s: 120,
+            dport_grouping: false,
+            block_mode: default_block_mode(),
+        }
+    }
+}
+
+fn default_block_mode() -> String {
+    "hard".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_threshold() -> u64 {
+    // threshold 是"突发信用"而非 pps：稳态 ≈ (每 tick 到达数)/(1 - decay_num/decay_den)。
+    // 默认 100ms tick + 7/8 衰减时，200 只相当于约 250pps 就会被封，
+    // 对 NAT 出口/健康检查/API 客户端太激进；2000 约等于 2500pps 持续速率，
+    // 仍远低于 Flood 级别（几十万 pps），误封风险显著下降。
+    2000
+}
+fn default_tick_ms() -> u64 {
+    100
+}
+fn default_decay_num() -> u64 {
+    7
+}
+fn default_decay_den() -> u64 {
+    8
+}
+fn default_block_duration_s() -> u64 {
+    // 误封代价优先：默认封 2 分钟，由 adaptive 对重复攻击源自动加长。
+    120
+}
+
+/// 按目的端口限速参数：对（协议 + 目的端口）维度做速率限制，
+/// 用于防换源 IP 绕过（源 IP 随机化时 per-IP 限速失效）。
+/// v0.5.0 起默认开启：实测伪造源 SYN/UDP Flood 可绕开 per-IP 黑名单，
+/// 端口维度是唯一不依赖源地址的兜底；阈值默认高于 per-IP（聚合多源流量）。
+#[derive(Debug, Clone, Deserialize)]
+pub struct PortRateLimitConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_port_rate_threshold")]
+    pub threshold: u64,
+    #[serde(default = "default_tick_ms")]
+    pub tick_ms: u64,
+}
+
+impl Default for PortRateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 2000,
+            tick_ms: 100,
+        }
+    }
+}
+
+fn default_port_rate_threshold() -> u64 {
+    2000
+}
+
+/// 启动资源预检（v0.5.0）：避免在过小规格机器上"装上就跑、跑着被 OOM"。
+/// 实测 400MB 内存实例在装 nginx + XuanArmor 后 sshd 失去响应。
+#[derive(Debug, Clone, Deserialize)]
+pub struct LimitsConfig {
+    /// 低于该值启动时打印醒目告警（默认 512MB）
+    #[serde(default = "default_min_memory_mb")]
+    pub min_memory_mb: u64,
+    /// 读取环境变量，兼容 v0.5.x 的旧前缀（ESHIELD_*）。
+pub fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
+    std::env::var(new_name)
+        .ok()
+        .or_else(|| std::env::var(old_name).ok())
+}
+
+/// 低于该值直接拒绝启动（默认 256MB），可用 XUANARMOR_ALLOW_LOW_MEMORY=1 强制启动
+    #[serde(default = "default_refuse_memory_mb")]
+    pub refuse_memory_mb: u64,
+}
+
+impl Default for LimitsConfig {
+    fn default() -> Self {
+        Self {
+            min_memory_mb: default_min_memory_mb(),
+            refuse_memory_mb: default_refuse_memory_mb(),
+        }
+    }
+}
+
+fn default_min_memory_mb() -> u64 {
+    512
+}
+
+fn default_refuse_memory_mb() -> u64 {
+    256
+}
+
+impl Config {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let content = fs::read_to_string(path).context("failed to read config file")?;
+        let mut config: Config = toml::from_str(&content).context("failed to parse config file")?;
+        // 允许 `cargo xtask run --iface eth0` 通过环境变量覆盖配置文件中的网卡，
+        // 便于在不改动 /etc/xuanarmor/config.toml 的情况下做本地/CI 调试。
+        if let Ok(iface) = crate::config::env_compat("XUANARMOR_INTERFACE", "ESHIELD_INTERFACE") {
+            if !iface.is_empty() {
+                config.interface = iface;
+            }
+        }
+        Ok(config)
+    }
+
+    /// 校验配置合法性。
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.interface.is_empty() {
+            anyhow::bail!("interface cannot be empty");
+        }
+        if !interface_exists(&self.interface) {
+            anyhow::bail!(
+                "network interface '{}' does not exist or is not visible",
+                self.interface
+            );
+        }
+
+        match self.xdp.mode.to_ascii_lowercase().as_str() {
+            "auto" | "native" | "drv" | "generic" | "skb" => {}
+            other => {
+                anyhow::bail!("invalid [xdp].mode '{other}' (expected auto | native | generic)")
+            }
+        }
+
+        match self.xdp.fragment_policy.to_ascii_lowercase().as_str() {
+            "pass" | "rate_limit" | "drop" => {}
+            other => anyhow::bail!(
+                "invalid [xdp].fragment_policy '{other}' (expected pass | rate_limit | drop)"
+            ),
+        }
+
+        if self.xdp.persist_link && self.xdp.pin_path.trim().is_empty() {
+            anyhow::bail!("[xdp].pin_path 不能为空（persist_link = true 时需要 bpffs 路径）");
+        }
+
+        match self.rate_limit.block_mode.to_ascii_lowercase().as_str() {
+            "hard" | "soft" => {}
+            other => {
+                anyhow::bail!("invalid [rate_limit].block_mode '{other}' (expected hard | soft)")
+            }
+        }
+
+        for cidr in &self.whitelist {
+            crate::ip::parse_cidr(cidr)
+                .with_context(|| format!("invalid whitelist CIDR: {}", cidr))?;
+        }
+        for ip in &self.blacklist {
+            crate::ip::parse_ip_or_cidr(ip)
+                .with_context(|| format!("invalid blacklist IP/CIDR: {}", ip))?;
+        }
+
+        // 持久化目录必须可创建
+        if let Some(parent) = std::path::Path::new(&self.store_path).parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).with_context(|| {
+                    format!("cannot create store directory: {}", parent.display())
+                })?;
+            }
+        }
+
+        validate_port_acl_items(&self.port_acl)?;
+
+        if self.rate_limit.enabled {
+            if self.rate_limit.threshold == 0 {
+                anyhow::bail!("rate_limit.threshold must be > 0");
+            }
+            if self.rate_limit.tick_ms == 0 {
+                anyhow::bail!("rate_limit.tick_ms must be > 0");
+            }
+            if self.rate_limit.decay_den == 0 {
+                anyhow::bail!("rate_limit.decay_den must be > 0");
+            }
+        }
+
+        if self.port_rate_limit.enabled {
+            if self.port_rate_limit.threshold == 0 {
+                anyhow::bail!("port_rate_limit.threshold must be > 0");
+            }
+            if self.port_rate_limit.tick_ms == 0 {
+                anyhow::bail!("port_rate_limit.tick_ms must be > 0");
+            }
+        }
+
+        if self.adaptive.enabled {
+            if self.adaptive.threshold == 0 {
+                anyhow::bail!("adaptive.threshold must be > 0");
+            }
+            if self.adaptive.window_s == 0 {
+                anyhow::bail!("adaptive.window_s must be > 0");
+            }
+        }
+
+        validate_l7_patterns(&self.l7_scan.patterns)?;
+
+        if self.conn_track.enabled {
+            if self.conn_track.threshold == 0 {
+                anyhow::bail!("conn_track.threshold must be > 0");
+            }
+            if self.conn_track.window_ms == 0 {
+                anyhow::bail!("conn_track.window_ms must be > 0");
+            }
+        }
+
+        if self.trust_score.enabled {
+            if self.trust_score.add_divisor == 0 {
+                anyhow::bail!("trust_score.add_divisor must be > 0");
+            }
+            if self.trust_score.sub_divisor == 0 {
+                anyhow::bail!("trust_score.sub_divisor must be > 0");
+            }
+        }
+
+        if self.danger_signal.enabled {
+            if self.danger_signal.sample_interval_s == 0 {
+                anyhow::bail!("danger_signal.sample_interval_s must be > 0");
+            }
+            if !(self.danger_signal.anomaly_multiplier.is_finite()
+                && self.danger_signal.anomaly_multiplier > 0.0)
+            {
+                anyhow::bail!("danger_signal.anomaly_multiplier must be a positive finite number");
+            }
+        }
+
+        if self.packet_log.enabled {
+            if self.packet_log.sample_rate == 0 {
+                anyhow::bail!("packet_log.sample_rate must be > 0 when enabled");
+            }
+            if self.packet_log.memory_max_entries == 0 {
+                anyhow::bail!("packet_log.memory_max_entries must be > 0 when enabled");
+            }
+        }
+
+        if self.web_port == 0 {
+            anyhow::bail!("web_port cannot be 0");
+        }
+        if let Some(bind) = &self.web_bind {
+            if bind.trim().is_empty() {
+                anyhow::bail!("web_bind cannot be empty");
+            }
+            if bind.parse::<std::net::SocketAddr>().is_err() {
+                anyhow::bail!("web_bind must be in host:port form, got '{}'", bind);
+            }
+        }
+
+        validate_geoip(self)?;
+        validate_threat_intel(self)?;
+        validate_protection_projects_list(&self.protection_projects)?;
+        validate_hub(self)?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub fn parse_blacklist(&self) -> anyhow::Result<Vec<IpKey>> {
+        self.blacklist
+            .iter()
+            .map(|s| crate::ip::parse_ip_or_cidr(s))
+            .collect::<anyhow::Result<Vec<_>>>()
+    }
+}
+
+/// 端口 ACL 条目校验，供配置文件、Web API 与 Hub 规则包共用。
+pub fn validate_port_acl_items(items: &[PortAclItem]) -> anyhow::Result<()> {
+    if items.len() > xuanarmor_common::MAX_PORT_ACL {
+        anyhow::bail!(
+            "too many port_acl entries (max {})",
+            xuanarmor_common::MAX_PORT_ACL
+        );
+    }
+    for (i, entry) in items.iter().enumerate() {
+        let protocol = entry.protocol.to_lowercase();
+        if !matches!(protocol.as_str(), "tcp" | "udp" | "icmp" | "icmpv6" | "any") {
+            anyhow::bail!(
+                "port_acl[{}]: invalid protocol '{}', expected tcp/udp/icmp/icmpv6/any",
+                i,
+                entry.protocol
+            );
+        }
+        let action = entry.action.to_lowercase();
+        if !matches!(action.as_str(), "allow" | "drop") {
+            anyhow::bail!(
+                "port_acl[{}]: invalid action '{}', expected allow/drop",
+                i,
+                entry.action
+            );
+        }
+        if entry.dport == "*" || entry.dport == "any" {
+            continue;
+        }
+        if let Some((low, high)) = entry.dport.split_once('-') {
+            let low: u16 = low
+                .parse()
+                .with_context(|| format!("port_acl[{}]: invalid dport low", i))?;
+            let high: u16 = high
+                .parse()
+                .with_context(|| format!("port_acl[{}]: invalid dport high", i))?;
+            if low > high {
+                anyhow::bail!("port_acl[{}]: invalid port range {}-{}", i, low, high);
+            }
+        } else {
+            let _: u16 = entry
+                .dport
+                .parse()
+                .with_context(|| format!("port_acl[{}]: invalid dport", i))?;
+        }
+    }
+    Ok(())
+}
+
+fn interface_exists(iface: &str) -> bool {
+    std::path::Path::new("/sys/class/net").join(iface).exists()
+}
+
+fn validate_geoip(config: &Config) -> anyhow::Result<()> {
+    if !config.geoip.enabled {
+        return Ok(());
+    }
+    if !matches!(config.geoip.default_action.as_str(), "pass" | "drop") {
+        anyhow::bail!(
+            "geoip.default_action must be 'pass' or 'drop', got '{}'",
+            config.geoip.default_action
+        );
+    }
+    for code in &config.geoip.block_countries {
+        if code.len() != 2 {
+            anyhow::bail!(
+                "geoip block country code must be ISO-3166-1 alpha-2: {}",
+                code
+            );
+        }
+    }
+    for code in &config.geoip.allow_countries {
+        if code.len() != 2 {
+            anyhow::bail!(
+                "geoip allow country code must be ISO-3166-1 alpha-2: {}",
+                code
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_threat_intel(config: &Config) -> anyhow::Result<()> {
+    if !config.threat_intel.enabled {
+        return Ok(());
+    }
+    for (i, feed) in config.threat_intel.feeds.iter().enumerate() {
+        if feed.name.is_empty() {
+            anyhow::bail!("threat_intel.feeds[{}]: name cannot be empty", i);
+        }
+        if feed.url.is_empty() {
+            anyhow::bail!("threat_intel.feeds[{}]: url cannot be empty", i);
+        }
+        if feed.interval_s == 0 {
+            anyhow::bail!("threat_intel.feeds[{}]: interval_s must be > 0", i);
+        }
+        if feed.confidence > 100 {
+            anyhow::bail!("threat_intel.feeds[{}]: confidence must be 0-100", i);
+        }
+        if !matches!(feed.action.as_str(), "drop" | "allow") {
+            anyhow::bail!(
+                "threat_intel.feeds[{}]: action must be 'drop' or 'allow', got '{}'",
+                i,
+                feed.action
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_hub(config: &Config) -> anyhow::Result<()> {
+    if !config.hub.enabled {
+        return Ok(());
+    }
+    if config.hub.node_name.is_empty() {
+        anyhow::bail!("hub.node_name cannot be empty when hub is enabled");
+    }
+    if config.hub.urls.is_empty() {
+        anyhow::bail!("hub.urls cannot be empty when hub is enabled");
+    }
+    if config.hub.token.is_empty() {
+        anyhow::bail!("hub.token cannot be empty when hub is enabled");
+    }
+    for (i, url) in config.hub.urls.iter().enumerate() {
+        if url.is_empty() {
+            anyhow::bail!("hub.urls[{}] cannot be empty", i);
+        }
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            anyhow::bail!("hub.urls[{}] must start with http:// or https://", i);
+        }
+    }
+    if config.hub.sync_pull_interval_s == 0 {
+        anyhow::bail!("hub.sync_pull_interval_s must be > 0");
+    }
+    if config.hub.sync_push_interval_s == 0 {
+        anyhow::bail!("hub.sync_push_interval_s must be > 0");
+    }
+    if config.hub.push_min_hit_count == 0 {
+        anyhow::bail!("hub.push_min_hit_count must be > 0");
+    }
+    if config.hub.sync_rules_interval_s == 0 {
+        anyhow::bail!("hub.sync_rules_interval_s must be > 0");
+    }
+    Ok(())
+}
+
+/// L7 指纹校验，供配置文件、Web API 与 Hub 规则包共用。
+pub fn validate_l7_patterns(patterns: &[L7PatternConfig]) -> anyhow::Result<()> {
+    if patterns.len() > xuanarmor_common::MAX_L7_PATTERNS {
+        anyhow::bail!(
+            "too many L7 patterns (max {})",
+            xuanarmor_common::MAX_L7_PATTERNS
+        );
+    }
+    for (i, pat) in patterns.iter().enumerate() {
+        if pat.pattern.is_empty() {
+            anyhow::bail!("L7 pattern {} cannot be empty", i);
+        }
+        if pat.pattern.len() > 8 {
+            anyhow::bail!("L7 pattern {} exceeds 8 bytes", i);
+        }
+        if let Some(mask) = &pat.mask {
+            if mask.len() != pat.pattern.len() {
+                anyhow::bail!("L7 pattern {} mask length mismatch", i);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 防护项目校验，供配置文件、Web API 与 Hub 规则包共用。
+pub fn validate_protection_projects_list(projects: &[ProtectionProject]) -> anyhow::Result<()> {
+    if projects.len() > 256 {
+        anyhow::bail!("too many protection projects (max 256)");
+    }
+    let valid_modules: std::collections::HashSet<&str> = [
+        "syn_flood",
+        "udp_flood",
+        "icmp_flood",
+        "rate_limit",
+        "adaptive",
+        "l7_scan",
+        "geoip",
+        "tcp_reset",
+        "port_acl",
+        "conn_track",
+    ]
+    .into_iter()
+    .collect();
+    for (i, proj) in projects.iter().enumerate() {
+        if proj.name.is_empty() {
+            anyhow::bail!("protection_projects[{}]: name cannot be empty", i);
+        }
+        if !matches!(
+            proj.protocol.to_lowercase().as_str(),
+            "tcp" | "udp" | "icmp" | "icmpv6" | "any"
+        ) {
+            anyhow::bail!(
+                "protection_projects[{}]: invalid protocol '{}', expected tcp/udp/icmp/icmpv6/any",
+                i,
+                proj.protocol
+            );
+        }
+        if proj.dport.is_empty() {
+            anyhow::bail!("protection_projects[{}]: dport cannot be empty", i);
+        }
+        if proj.dport != "any" {
+            let _: u16 = proj
+                .dport
+                .parse()
+                .with_context(|| format!("protection_projects[{}]: invalid dport", i))?;
+        }
+        if !matches!(
+            proj.action.to_lowercase().as_str(),
+            "pass" | "drop" | "defend"
+        ) {
+            anyhow::bail!(
+                "protection_projects[{}]: invalid action '{}', expected pass/drop/defend",
+                i,
+                proj.action
+            );
+        }
+        for (j, m) in proj.enabled_modules.iter().enumerate() {
+            if !valid_modules.contains(m.as_str()) {
+                anyhow::bail!(
+                    "protection_projects[{}].enabled_modules[{}]: unknown module '{}'",
+                    i,
+                    j,
+                    m
+                );
+            }
+        }
+        if proj.target_ips.is_empty() {
+            anyhow::bail!(
+                "protection_projects[{}]: target_ips cannot be empty (data plane matches exact IPv4 only)",
+                i
+            );
+        }
+        let mut has_ipv4_target = false;
+        for (j, ip) in proj.target_ips.iter().enumerate() {
+            // 纯 IP 直接合法；CIDR 支持 /24 及以上网段（数据面按精确 IP 匹配，
+            // 控制面展开，过宽网段会撑爆 PROJECT_POLICY map，故拒绝）
+            if let Ok(key) = crate::ip::parse_ip(ip) {
+                if key.family() == Some(xuanarmor_common::IpFamily::Ipv4) {
+                    has_ipv4_target = true;
+                }
+                continue;
+            }
+            let (key, prefix) = crate::ip::parse_cidr(ip).with_context(|| {
+                format!(
+                    "protection_projects[{}].target_ips[{}]: invalid IP/CIDR",
+                    i, j
+                )
+            })?;
+            if key.family() == Some(xuanarmor_common::IpFamily::Ipv4) {
+                has_ipv4_target = true;
+                if prefix < 24 {
+                    anyhow::bail!(
+                        "protection_projects[{}].target_ips[{}]: CIDR /{} too broad (min /24, expanded to exact IPs)",
+                        i,
+                        j,
+                        prefix
+                    );
+                }
+            }
+        }
+        if !has_ipv4_target {
+            anyhow::bail!(
+                "protection_projects[{}]: at least one IPv4 target is required (data plane does not support IPv6 targets yet)",
+                i
+            );
+        }
+    }
+    Ok(())
+}
+
+impl PortAclItem {
+    pub fn to_entry(&self) -> anyhow::Result<PortAclEntry> {
+        let protocol = match self.protocol.to_lowercase().as_str() {
+            "any" => 0u8,
+            "tcp" => 6u8,
+            "udp" => 17u8,
+            "icmp" => 1u8,
+            "icmpv6" => 58u8,
+            _ => anyhow::bail!("invalid protocol: {}", self.protocol),
+        };
+        let action = match self.action.to_lowercase().as_str() {
+            "allow" => 1u8,
+            "drop" => 2u8,
+            _ => anyhow::bail!("invalid action: {}", self.action),
+        };
+        let (low, high) = if self.dport == "*" || self.dport == "any" {
+            (0u16, 0u16)
+        } else if let Some((a, b)) = self.dport.split_once('-') {
+            let low: u16 = a.parse().context("invalid dport low")?;
+            let high: u16 = b.parse().context("invalid dport high")?;
+            if low > high {
+                anyhow::bail!("invalid port range");
+            }
+            (low, high)
+        } else {
+            let p: u16 = self.dport.parse().context("invalid dport")?;
+            (p, p)
+        };
+        Ok(PortAclEntry {
+            protocol,
+            dport_low: u16::to_be(low),
+            dport_high: u16::to_be(high),
+            action,
+            padding: [0; 12],
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xuanarmor_common::IpFamily;
+
+    #[test]
+    fn test_parse_ip_ipv4_ok() {
+        let key = crate::ip::parse_ip("192.0.2.1").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv4 as u8);
+        assert_eq!(key.ipv4(), 0xc000_0201);
+    }
+
+    #[test]
+    fn test_parse_ip_ipv6_ok() {
+        let key = crate::ip::parse_ip("2001:db8::1").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv6 as u8);
+        let expected: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        assert_eq!(key.addr, expected);
+    }
+
+    #[test]
+    fn test_parse_cidr_ipv4_ok() {
+        let (key, prefix) = crate::ip::parse_cidr("10.0.0.0/8").unwrap();
+        assert_eq!(prefix, 8);
+        assert_eq!(key.family, IpFamily::Ipv4 as u8);
+        assert_eq!(key.ipv4(), 0x0a00_0000);
+    }
+
+    #[test]
+    fn test_parse_cidr_ipv6_ok() {
+        let (key, prefix) = crate::ip::parse_cidr("2001:db8::/32").unwrap();
+        assert_eq!(prefix, 32);
+        assert_eq!(key.family, IpFamily::Ipv6 as u8);
+        assert_eq!(&key.addr[..4], &[0x20, 0x01, 0x0d, 0xb8]);
+        assert!(key.addr[4..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_prefix_rejected() {
+        assert!(crate::ip::parse_cidr("192.0.2.0/33").is_err());
+        assert!(crate::ip::parse_cidr("2001:db8::/129").is_err());
+    }
+
+    #[test]
+    fn test_port_acl_item_to_entry() {
+        let item = PortAclItem {
+            protocol: "tcp".to_string(),
+            dport: "80".to_string(),
+            action: "drop".to_string(),
+        };
+        let entry = item.to_entry().unwrap();
+        assert_eq!(entry.protocol, 6);
+        // eBPF Map 中端口按网络字节序存储，因此断言也要用网络字节序。
+        assert_eq!(entry.dport_low, u16::to_be(80));
+        assert_eq!(entry.dport_high, u16::to_be(80));
+        assert_eq!(entry.action, 2);
+    }
+
+    #[test]
+    fn test_port_acl_item_range_to_entry() {
+        let item = PortAclItem {
+            protocol: "udp".to_string(),
+            dport: "1000-2000".to_string(),
+            action: "allow".to_string(),
+        };
+        let entry = item.to_entry().unwrap();
+        assert_eq!(entry.protocol, 17);
+        assert_eq!(entry.dport_low, u16::to_be(1000));
+        assert_eq!(entry.dport_high, u16::to_be(2000));
+        assert_eq!(entry.action, 1);
+    }
+
+    #[test]
+    fn test_port_acl_item_any_to_entry() {
+        let item = PortAclItem {
+            protocol: "any".to_string(),
+            dport: "any".to_string(),
+            action: "drop".to_string(),
+        };
+        let entry = item.to_entry().unwrap();
+        assert_eq!(entry.protocol, 0);
+        assert_eq!(entry.dport_low, 0);
+        assert_eq!(entry.dport_high, 0);
+        assert_eq!(entry.action, 2);
+    }
+
+    #[test]
+    fn test_validate_projects_rejects_empty_targets() {
+        let project = ProtectionProject {
+            name: "p".to_string(),
+            description: String::new(),
+            protocol: "tcp".to_string(),
+            dport: "80".to_string(),
+            target_ips: Vec::new(),
+            enabled_modules: Vec::new(),
+            action: "defend".to_string(),
+        };
+        assert!(validate_protection_projects_list(&[project]).is_err());
+    }
+
+    #[test]
+    fn test_validate_l7_patterns_rejects_too_many() {
+        let patterns: Vec<L7PatternConfig> = (0..17)
+            .map(|i| L7PatternConfig {
+                pattern: format!("P{}", i % 10),
+                mask: None,
+            })
+            .collect();
+        assert!(validate_l7_patterns(&patterns).is_err());
+    }
+}

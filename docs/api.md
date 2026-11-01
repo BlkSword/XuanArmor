@@ -8,7 +8,7 @@
 > - 新增只读 Token（`readonly_token`）：只允许 `GET/HEAD/OPTIONS`，写操作返回 403；
 > - `GET/PATCH /api/config` 新增 `fragment_policy`、`rate_limit_block_mode`；`GET` 另返回 `audit_path`/`audit_enabled`；
 > - `/api/stats` 新增 `port_rate_blocked`、`fragment_blocked`；`/metrics` 新增
->   `eshield_map_usage_ratio`、`eshield_fragment_blocked_total`、`eshield_port_rate_blocked_total`；
+>   `xuanarmor_map_usage_ratio`、`xuanarmor_fragment_blocked_total`、`xuanarmor_port_rate_blocked_total`；
 > - 新增规则/原因 ID：`FRAGMENT=14`（分片策略）、`PORT_RATE=15`（端口聚合限速）。
 
 > **v0.4.5 破坏性变更**：`/api/attack-events` 与 `/api/packets` 返回的 `timestamp_ns` 字段语义由 **eBPF 单调时钟纳秒**（开机起算）改为 **wall-clock Unix 纳秒**（后端统一转换后返回）。此前依赖该字段自行对齐 `CLOCK_MONOTONIC` 的客户端需要改为按 Unix 时间戳处理。
@@ -30,7 +30,7 @@ Authorization: Bearer <token>
 
 - 本机 CLI 来源地址为 `127.0.0.1/::1`，自动跳过 token 校验（视为 `admin`）；
   但带 `X-Forwarded-For`/`X-Real-IP`/`Forwarded` 头的反向代理请求不享受该豁免。
-- 浏览器登录后由后端下发 `eshield-token` HttpOnly Cookie，Cookie 与 Bearer 等价；
+- 浏览器登录后由后端下发 `xuanarmor-token` HttpOnly Cookie，Cookie 与 Bearer 等价；
   只读 Token 不能用于 `POST /api/auth/login` 登录控制台。
 - 写方法使用只读 Token 时返回：
 
@@ -48,11 +48,11 @@ Authorization: Bearer <token>
 | `/ready` | GET | 就绪检查（v0.4.8 起反映真实挂载状态，见下方说明） |
 | `/login` | GET | 控制台登录入口（Vue SPA，登录态由 SPA 处理） |
 | `/blocked` | GET | 403 封禁示例页 |
-| `/api/auth/login` | POST | 控制台登录验证（成功后下发 HttpOnly `eshield-token` Cookie） |
+| `/api/auth/login` | POST | 控制台登录验证（成功后下发 HttpOnly `xuanarmor-token` Cookie） |
 | `/api/auth/check` | GET | 校验当前凭据并返回角色（v0.5.0：JSON） |
 | `/api/auth/logout` | POST | 清除控制台会话 Cookie（v0.4.8） |
 | `/api/auth/reset-token` | POST | 重置访问令牌 |
-| `/` | GET | Web Dashboard（Vue 3 单文件 SPA，`console/` 构建后嵌入 `eshield/web/app.html`） |
+| `/` | GET | Web Dashboard（Vue 3 单文件 SPA，`console/` 构建后嵌入 `xuanarmor/web/app.html`） |
 | `/api/stats` | GET | 运行统计 |
 | `/api/attack-events` | GET | 攻击事件（DROP），`timestamp_ns` 为 wall-clock Unix 纳秒 |
 | `/api/packets` | GET | 采样包日志，`timestamp_ns` 为 wall-clock Unix 纳秒 |
@@ -141,7 +141,7 @@ Authorization: Bearer <token>
   "web_bind": "0.0.0.0:8720",
   "log_level": "info",
   "log_json": false,
-  "store_path": "/var/lib/eshield/rules.redb",
+  "store_path": "/var/lib/xuanarmor/rules.redb",
   "rate_limit_enabled": true,
   "syn_proxy_enabled": false,
   "l7_scan_enabled": false,
@@ -177,7 +177,7 @@ Authorization: Bearer <token>
   },
   "fragment_policy": "rate_limit",
   "rate_limit_block_mode": "hard",
-  "audit_path": "/var/log/eshield/audit.log",
+  "audit_path": "/var/log/xuanarmor/audit.log",
   "audit_enabled": false,
   "adaptive": { "...": "..." },
   "port_acl": [],
@@ -252,7 +252,7 @@ v0.5.0 可写字段：
 }
 ```
 
-> `PATCH` 只影响运行时，不会写回 `/etc/eshield/config.toml`；
+> `PATCH` 只影响运行时，不会写回 `/etc/xuanarmor/config.toml`；
 > 重启或 `POST /api/config/reload` 后会回到配置文件中的值。
 
 ### POST /api/config/reload
@@ -299,11 +299,11 @@ v0.5.0 可写字段：
 `hash = sha256(seq|prev_hash|规范化内容)`）。
 
 ```json
-{"ok": true, "checked": 1024, "first_bad_seq": null, "path": "/var/log/eshield/audit.log"}
+{"ok": true, "checked": 1024, "first_bad_seq": null, "path": "/var/log/xuanarmor/audit.log"}
 ```
 
 ```json
-{"ok": false, "checked": 900, "first_bad_seq": 513, "path": "/var/log/eshield/audit.log"}
+{"ok": false, "checked": 900, "first_bad_seq": 513, "path": "/var/log/xuanarmor/audit.log"}
 ```
 
 - 文件审计未启用时返回 `{"ok":true,"enabled":false,"message":"..."}`；
@@ -384,18 +384,18 @@ Prometheus 指标。v0.5.0 新增：
 
 | 指标 | 类型 | 说明 |
 |---|---|---|
-| `eshield_map_usage_ratio{interface,name}` | gauge | map 使用率（entries/max_entries），仅采样表有值。 |
-| `eshield_map_entries{interface,name}` | gauge | 采样表当前条目数。 |
-| `eshield_map_max_entries{interface,name,map_type}` | gauge | map 容量（启动时采集，不变）。 |
-| `eshield_fragment_blocked_total{interface,policy}` | counter | 分片策略拦截数，`policy` 为当前策略。 |
-| `eshield_port_rate_blocked_total{interface}` | counter | 端口聚合限速拦截数。 |
+| `xuanarmor_map_usage_ratio{interface,name}` | gauge | map 使用率（entries/max_entries），仅采样表有值。 |
+| `xuanarmor_map_entries{interface,name}` | gauge | 采样表当前条目数。 |
+| `xuanarmor_map_max_entries{interface,name,map_type}` | gauge | map 容量（启动时采集，不变）。 |
+| `xuanarmor_fragment_blocked_total{interface,policy}` | counter | 分片策略拦截数，`policy` 为当前策略。 |
+| `xuanarmor_port_rate_blocked_total{interface}` | counter | 端口聚合限速拦截数。 |
 
-已有指标：`eshield_dropped_total`、`eshield_passed_total`、`eshield_blacklist_blocked_total`、
-`eshield_rate_limited_total`、`eshield_syn_flood_blocked_total`、`eshield_l7_blocked_total`、
-`eshield_adaptive_blocked_total`、`eshield_udp_flood_blocked_total`、`eshield_icmp_flood_blocked_total`、
-`eshield_geoip_blocked_total`、`eshield_conn_track_blocked_total`、
-`eshield_dropped_by_protocol_total{protocol}`、`eshield_dropped_by_port_total{port}`、
-`eshield_source_dropped_total{ip}`、`eshield_event_consumer_duration_us`（直方图）。
+已有指标：`xuanarmor_dropped_total`、`xuanarmor_passed_total`、`xuanarmor_blacklist_blocked_total`、
+`xuanarmor_rate_limited_total`、`xuanarmor_syn_flood_blocked_total`、`xuanarmor_l7_blocked_total`、
+`xuanarmor_adaptive_blocked_total`、`xuanarmor_udp_flood_blocked_total`、`xuanarmor_icmp_flood_blocked_total`、
+`xuanarmor_geoip_blocked_total`、`xuanarmor_conn_track_blocked_total`、
+`xuanarmor_dropped_by_protocol_total{protocol}`、`xuanarmor_dropped_by_port_total{port}`、
+`xuanarmor_source_dropped_total{ip}`、`xuanarmor_event_consumer_duration_us`（直方图）。
 
 > 指标抓取需要 `api_token` 或 `readonly_token`（GET 即可）。
 

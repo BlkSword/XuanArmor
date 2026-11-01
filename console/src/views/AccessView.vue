@@ -39,7 +39,7 @@ async function load() {
   selected.value = keep
 }
 onMounted(load)
-window.addEventListener('eshield:saved', () => load())
+window.addEventListener('xuanarmor:saved', () => load())
 
 function toggle(ip: string) {
   const next = new Set(selected.value)

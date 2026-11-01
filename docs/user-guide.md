@@ -42,7 +42,7 @@ XuanArmor 是一款基于 eBPF/XDP 的主机级 L3-L4 网络清洗盾，运行�
 - 防御 SYN Flood、UDP Flood、ICMP Flood、CC 等网络层攻击。
 - 对入口流量做 per-IP 速率限制、端口 ACL、GeoIP/ASN 过滤、威胁情报联动。
 - 通过中文 Web 控制台、CLI、TUI、REST API 实时观测与运维。
-- 多节点场景下通过 `eshield-hub` 共享黑名单与信誉。
+- 多节点场景下通过 `xuanarmor-hub` 共享黑名单与信誉。
 
 > **定位**：XuanArmor 是主机级清洗盾，无法突破物理带宽上限。T 级带宽耗尽型攻击需要上游云厂商黑洞/清洗配合。
 
@@ -55,13 +55,13 @@ XuanArmor 是一款基于 eBPF/XDP 的主机级 L3-L4 网络清洗盾，运行�
 安装完成后，使用 systemd 启动：
 
 ```bash
-sudo systemctl enable --now eshield
+sudo systemctl enable --now xuanarmor
 ```
 
 或手动启动：
 
 ```bash
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 ```
 
 ### 2.2 访问控制台
@@ -84,7 +84,7 @@ http://<服务器IP>:8720/
 Token 可通过以下方式重置：
 
 ```bash
-sudo eshield reset-token
+sudo xuanarmor reset-token
 ```
 
 ---
@@ -165,7 +165,7 @@ v0.4.2 新增。
 
 ## 4. 配置文件说明
 
-默认配置文件路径：`/etc/eshield/config.toml`。完整示例见 `packaging/config.example.toml`。
+默认配置文件路径：`/etc/xuanarmor/config.toml`。完整示例见 `packaging/config.example.toml`。
 
 ### 4.1 基础配置
 
@@ -180,7 +180,7 @@ v0.4.2 新增。
 | `web_bind` | Web/API 监听地址 | `"0.0.0.0:8720"` |
 | `api_token` | 读写访问 Token；未设置时进程自动生成随机 Token（不存在匿名外部模式） | `"changeme"` |
 | `readonly_token` | 只读 Token（v0.5.0）：仅允许 GET/HEAD/OPTIONS，写操作 403 | `"readonly-changeme"` |
-| `store_path` | 动态规则 redb 持久化路径 | `"/var/lib/eshield/rules.redb"` |
+| `store_path` | 动态规则 redb 持久化路径 | `"/var/lib/xuanarmor/rules.redb"` |
 | `timeseries_retention_days` | 时序指标保留天数 | `30` |
 
 ### 4.2 告警配置
@@ -196,7 +196,7 @@ alert_cooldown_s = 60
 ```toml
 [audit]
 enabled = false
-path = "/var/log/eshield/audit.log"
+path = "/var/log/xuanarmor/audit.log"
 max_size_mb = 100
 ```
 
@@ -255,7 +255,7 @@ block_duration_s = 300
 ```toml
 [geoip]
 enabled = false
-country_blocks_csv = "/etc/eshield/geoip_country.csv"
+country_blocks_csv = "/etc/xuanarmor/geoip_country.csv"
 block_countries = ["XX"]
 default_action = "pass"
 ```
@@ -341,7 +341,7 @@ readonly_token = "readonly-changeme"   # 仅 GET/HEAD/OPTIONS；写操作 403
 ```toml
 [limits]
 min_memory_mb = 512      # 低于该值告警
-refuse_memory_mb = 256   # 低于该值拒绝启动（ESHIELD_ALLOW_LOW_MEMORY=1 可强制，不推荐）
+refuse_memory_mb = 256   # 低于该值拒绝启动（XUANARMOR_ALLOW_LOW_MEMORY=1 可强制，不推荐）
 ```
 
 ---
@@ -350,44 +350,44 @@ refuse_memory_mb = 256   # 低于该值拒绝启动（ESHIELD_ALLOW_LOW_MEMORY=1
 
 ```bash
 # 查看状态
-eshield status
+xuanarmor status
 
 # 实时封禁 IP（300 秒）
-eshield block 192.0.2.1 --duration 300
+xuanarmor block 192.0.2.1 --duration 300
 
 # 永久封禁
-eshield block 192.0.2.1
+xuanarmor block 192.0.2.1
 
 # 解封
-eshield unblock 192.0.2.1
+xuanarmor unblock 192.0.2.1
 
 # 重新加载配置文件
-eshield reload
+xuanarmor reload
 
 # 校验配置
-eshield check --config /etc/eshield/config.toml
+xuanarmor check --config /etc/xuanarmor/config.toml
 
 # 启动 TUI 仪表盘
-eshield tui
+xuanarmor tui
 
 # 重置控制台 Token
-eshield reset-token
+xuanarmor reset-token
 
 # 远程操作
-eshield status --endpoint http://eshield-host:8720
-eshield block 192.0.2.1 --endpoint http://eshield-host:8720
+xuanarmor status --endpoint http://xuanarmor-host:8720
+xuanarmor block 192.0.2.1 --endpoint http://xuanarmor-host:8720
 ```
 
 ---
 
 ## 6. 热加载与重启
 
-修改 `/etc/eshield/config.toml` 后，无需重启：
+修改 `/etc/xuanarmor/config.toml` 后，无需重启：
 
 ```bash
-sudo systemctl reload eshield
+sudo systemctl reload xuanarmor
 # 或
-sudo kill -HUP $(pidof eshield)
+sudo kill -HUP $(pidof xuanarmor)
 ```
 
 > 注意：部分配置（如 `interface`、`web_bind`、`store_path`）仅在进程启动时生效，热加载不会切换网卡或监听地址。
@@ -400,26 +400,26 @@ XuanArmor 持久化以下数据到本地磁盘：
 
 | 文件 | 路径 | 说明 |
 |---|---|---|
-| 动态规则库 | `/var/lib/eshield/rules.redb` | 黑名单、白名单、ACL、L7 指纹、威胁情报命中等 |
-| 时序指标库 | `/var/lib/eshield/timeseries.redb` | 分钟级 PPS/DPS/拦截趋势，保留 `timeseries_retention_days` 天 |
-| 审计日志 | `/var/log/eshield/audit.log` | 操作审计 JSON Lines（可选开启） |
-| 配置文件 | `/etc/eshield/config.toml` | 静态配置 |
+| 动态规则库 | `/var/lib/xuanarmor/rules.redb` | 黑名单、白名单、ACL、L7 指纹、威胁情报命中等 |
+| 时序指标库 | `/var/lib/xuanarmor/timeseries.redb` | 分钟级 PPS/DPS/拦截趋势，保留 `timeseries_retention_days` 天 |
+| 审计日志 | `/var/log/xuanarmor/audit.log` | 操作审计 JSON Lines（可选开启） |
+| 配置文件 | `/etc/xuanarmor/config.toml` | 静态配置 |
 
 ### 备份
 
 ```bash
-sudo tar czf eshield-backup.tar.gz /etc/eshield /var/lib/eshield /var/log/eshield
+sudo tar czf xuanarmor-backup.tar.gz /etc/xuanarmor /var/lib/xuanarmor /var/log/xuanarmor
 ```
 
 ### 恢复
 
 ```bash
-sudo systemctl stop eshield
-sudo tar xzf eshield-backup.tar.gz -C /
-sudo systemctl start eshield
+sudo systemctl stop xuanarmor
+sudo tar xzf xuanarmor-backup.tar.gz -C /
+sudo systemctl start xuanarmor
 ```
 
-> 手动删除 `/var/lib/eshield/*.redb` 会导致历史规则/时序清空，重启后重新积累。
+> 手动删除 `/var/lib/xuanarmor/*.redb` 会导致历史规则/时序清空，重启后重新积累。
 
 ---
 
@@ -434,7 +434,7 @@ sudo systemctl start eshield
 或直接使用 CLI：
 
 ```bash
-eshield block 192.0.2.1 --duration 3600
+xuanarmor block 192.0.2.1 --duration 3600
 ```
 
 ### 8.2 分析被丢弃的包
@@ -453,7 +453,7 @@ enabled = true
 然后热加载：
 
 ```bash
-eshield reload
+xuanarmor reload
 ```
 
 ### 8.4 按国家封禁流量
@@ -470,7 +470,7 @@ network,country
 ```toml
 [geoip]
 enabled = true
-country_blocks_csv = "/etc/eshield/geoip_country.csv"
+country_blocks_csv = "/etc/xuanarmor/geoip_country.csv"
 block_countries = ["XX"]
 ```
 
@@ -503,16 +503,16 @@ http://<host>:8720/metrics
 
 主要指标：
 
-- `eshield_dropped_total`
-- `eshield_passed_total`
-- `eshield_blacklist_blocked_total`
-- `eshield_rate_limited_total`
-- `eshield_geoip_blocked_total`
-- `eshield_syn_flood_blocked_total`
-- `eshield_udp_flood_blocked_total`
-- `eshield_icmp_flood_blocked_total`
-- v0.5.0 新增：`eshield_map_usage_ratio{name}`、`eshield_fragment_blocked_total{policy}`、
-  `eshield_port_rate_blocked_total`
+- `xuanarmor_dropped_total`
+- `xuanarmor_passed_total`
+- `xuanarmor_blacklist_blocked_total`
+- `xuanarmor_rate_limited_total`
+- `xuanarmor_geoip_blocked_total`
+- `xuanarmor_syn_flood_blocked_total`
+- `xuanarmor_udp_flood_blocked_total`
+- `xuanarmor_icmp_flood_blocked_total`
+- v0.5.0 新增：`xuanarmor_map_usage_ratio{name}`、`xuanarmor_fragment_blocked_total{policy}`、
+  `xuanarmor_port_rate_blocked_total`
 
 map 水位的 JSON 视图：`GET /api/map-usage`；Prometheus 告警规则示例见 [operations.md](operations.md)。
 
@@ -527,7 +527,7 @@ map 水位的 JSON 视图：`GET /api/map-usage`；Prometheus 告警规则示例
 | Dashboard 无法访问 | 防火墙/安全组未放行 8720 | `ss -tlnp \| grep 8720`、检查云厂商安全组 |
 | 流量未被拦截 | 源 IP 在白名单 / 规则未启用 | 检查 `whitelist`、确认对应模块开关已启用 |
 | 包日志为空 | 未启用 packet_log / 采样率过高 / 无 DROP 流量 | 检查 `[packet_log]`、确认有攻击流量 |
-| 时序图空白 | 进程重启后数据清空 / 保留期已过 | 检查 `/var/lib/eshield/timeseries.redb` 是否存在 |
+| 时序图空白 | 进程重启后数据清空 / 保留期已过 | 检查 `/var/lib/xuanarmor/timeseries.redb` 是否存在 |
 | 节点策略未同步 | Hub 不可达 / Token 错误 / `node_name` 冲突 | 查看 `/api/hub/status`、检查节点名唯一性 |
 
 更多架构、开发、部署细节请参考：

@@ -8,27 +8,27 @@ INTERVAL="${INTERVAL:-u1}"
 PORT="${PORT:-80}"
 
 cleanup() {
-    ip netns del eshield-server 2>/dev/null || true
-    ip netns del eshield-client 2>/dev/null || true
-    rm -f /tmp/eshield_bench.toml
+    ip netns del xuanarmor-server 2>/dev/null || true
+    ip netns del xuanarmor-client 2>/dev/null || true
+    rm -f /tmp/xuanarmor_bench.toml
 }
 trap cleanup EXIT
 
 setup_netns() {
-    ip netns add eshield-server
-    ip netns add eshield-client
+    ip netns add xuanarmor-server
+    ip netns add xuanarmor-client
 
     ip link add veth-server type veth peer name veth-client
-    ip link set veth-server netns eshield-server
-    ip link set veth-client netns eshield-client
+    ip link set veth-server netns xuanarmor-server
+    ip link set veth-client netns xuanarmor-client
 
-    ip netns exec eshield-server ip addr add 10.0.0.1/24 dev veth-server
-    ip netns exec eshield-client ip addr add 10.0.0.2/24 dev veth-client
+    ip netns exec xuanarmor-server ip addr add 10.0.0.1/24 dev veth-server
+    ip netns exec xuanarmor-client ip addr add 10.0.0.2/24 dev veth-client
 
-    ip netns exec eshield-server ip link set veth-server up
-    ip netns exec eshield-client ip link set veth-client up
-    ip netns exec eshield-server ip link set lo up
-    ip netns exec eshield-client ip link set lo up
+    ip netns exec xuanarmor-server ip link set veth-server up
+    ip netns exec xuanarmor-client ip link set veth-client up
+    ip netns exec xuanarmor-server ip link set lo up
+    ip netns exec xuanarmor-client ip link set lo up
 }
 
 run_hping() {
@@ -36,7 +36,7 @@ run_hping() {
     echo "--- $label ---"
     local start end elapsed pps
     start=$(date +%s%N)
-    ip netns exec eshield-client hping3 -S -p "$PORT" -c "$PACKETS" -i "$INTERVAL" 10.0.0.1 >/dev/null 2>&1 || true
+    ip netns exec xuanarmor-client hping3 -S -p "$PORT" -c "$PACKETS" -i "$INTERVAL" 10.0.0.1 >/dev/null 2>&1 || true
     end=$(date +%s%N)
     elapsed=$(( (end - start) ))
     if [ "$elapsed" -eq 0 ]; then elapsed=1; fi
@@ -47,7 +47,7 @@ run_hping() {
 
 write_config() {
     local blacklist=$1
-    cat > /tmp/eshield_bench.toml <<EOF
+    cat > /tmp/xuanarmor_bench.toml <<EOF
 interface = "veth-server"
 log_level = "warn"
 whitelist = ["10.0.0.1/32"]
@@ -88,22 +88,22 @@ main() {
     run_hping "Baseline (no XuanArmor)"
 
     write_config ""
-    cp target/x86_64-unknown-linux-musl/release/eshield /tmp/eshield
-    ip netns exec eshield-server /tmp/eshield start --config /tmp/eshield_bench.toml &
-    ESHIELD_PID=$!
+    cp target/x86_64-unknown-linux-musl/release/xuanarmor /tmp/xuanarmor
+    ip netns exec xuanarmor-server /tmp/xuanarmor start --config /tmp/xuanarmor_bench.toml &
+    XUANARMOR_PID=$!
     sleep 2
     run_hping "XDP PASS (no drop rules)"
-    kill $ESHIELD_PID 2>/dev/null || true
-    wait $ESHIELD_PID 2>/dev/null || true
+    kill $XUANARMOR_PID 2>/dev/null || true
+    wait $XUANARMOR_PID 2>/dev/null || true
     sleep 1
 
     write_config '"10.0.0.2"'
-    ip netns exec eshield-server /tmp/eshield start --config /tmp/eshield_bench.toml &
-    ESHIELD_PID=$!
+    ip netns exec xuanarmor-server /tmp/xuanarmor start --config /tmp/xuanarmor_bench.toml &
+    XUANARMOR_PID=$!
     sleep 2
     run_hping "XDP DROP (blacklist source)"
-    kill $ESHIELD_PID 2>/dev/null || true
-    wait $ESHIELD_PID 2>/dev/null || true
+    kill $XUANARMOR_PID 2>/dev/null || true
+    wait $XUANARMOR_PID 2>/dev/null || true
 
     echo ""
     echo "=== Benchmark complete ==="

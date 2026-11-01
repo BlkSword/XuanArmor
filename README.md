@@ -1,6 +1,6 @@
 # XuanArmor
 
-> 原名 eShield，自 v0.5.1 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/eshield`）与 `ESHIELD_*` 环境变量保持不变，既有部署与升级路径不受影响。
+> 原名 eShield，自 v0.6.0 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
 
 [English](README_EN.md) | 中文
 
@@ -13,14 +13,18 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 
 ## 快速开始（一键部署）
 
+> 从旧版本（≤ 0.5.1，命令名 `eshield`）升级：直接执行上面的一键命令即可，
+> 安装脚本会自动停止旧服务、迁移配置与数据到 `/etc/xuanarmor`、`/var/lib/xuanarmor`，
+> 并创建 `/usr/local/bin/eshield` → `xuanarmor` 兼容软链。
+
 一行命令完成下载、SHA256 校验、安装、systemd 注册与启动：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
 ```
 
-- 默认安装 **最新 Release**，自动识别活动网卡并生成 `/etc/eshield/config.toml`；
-- 安装完成后访问 `http://<服务器IP>:8720` 进入控制台（首次登录先执行 `sudo eshield reset-token` 获取 Token）；
+- 默认安装 **最新 Release**，自动识别活动网卡并生成 `/etc/xuanarmor/config.toml`；
+- 安装完成后访问 `http://<服务器IP>:8720` 进入控制台（首次登录先执行 `sudo xuanarmor reset-token` 获取 Token）；
 - 确认防护状态：`curl -s http://127.0.0.1:8720/ready` 返回 `200` 表示服务就绪且 XDP 已挂载。
 
 常用变体：
@@ -32,13 +36,13 @@ curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/ins
 # 指定版本并校验 SHA256
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1 --sha256 <官方 SHA256>
 
-# 只安装不启动（先修改配置，再 systemctl start eshield）
+# 只安装不启动（先修改配置，再 systemctl start xuanarmor）
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --no-start
 
 # 从源码构建并安装（需要 rustup / clang / bpf-linker）
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh --build
 
-# 升级（已安装 v0.5.1+ 时走平滑升级，数据面不中断）、回滚、卸载
+# 升级（已安装 v0.6.0+ 时走平滑升级，数据面不中断）、回滚、卸载
 sudo bash scripts/install.sh --version 0.5.1
 sudo bash scripts/install.sh --rollback
 sudo bash scripts/install.sh --uninstall
@@ -93,9 +97,9 @@ sudo bash scripts/install.sh --uninstall
 
 ## 1. 项目概述
 
-> **v0.5.1（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
-> 新进程启动时原子替换，升级/重启期间数据面不中断；新增 `eshield upgrade`（备份、健康检查、失败回滚）与
-> `eshield detach`；Web 监听支持 `SO_REUSEPORT` 并优雅关闭。
+> **v0.6.0（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
+> 新进程启动时原子替换，升级/重启期间数据面不中断；新增 `xuanarmor upgrade`（备份、健康检查、失败回滚）与
+> `xuanarmor detach`；Web 监听支持 `SO_REUSEPORT` 并优雅关闭。
 > **v0.5.0（2026-10-31）**：产品化与能力补齐。修复伪造源 IP 与 IPv4 分片绕过（默认开启按目的端口聚合
 > 限速、新增 `[xdp].fragment_policy` 分片策略）、新增 `[rate_limit].block_mode = hard|soft` 软封禁、
 > 启动内存预检、只读 Token（RBAC-lite）、审计哈希链防篡改、map 水位可观测。
@@ -109,10 +113,10 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 
 | 组件 | 说明 |
 |---|---|
-| `eshield-ebpf` | XDP/eBPF 数据面，负责每包解析、规则匹配、丢弃、TCP RST 与 SYN Cookie 回包。 |
-| `eshield` | 用户态控制面，负责配置、API、Web 控制台、TUI、持久化、审计、告警与 Hub 同步。 |
-| `eshield-common` | 数据面与控制面共享的结构体、常量与纯函数。 |
-| `eshield-hub` | 分布式策略聚合服务，负责多节点策略共享、节点注册与每节点 Token 管理。 |
+| `xuanarmor-ebpf` | XDP/eBPF 数据面，负责每包解析、规则匹配、丢弃、TCP RST 与 SYN Cookie 回包。 |
+| `xuanarmor` | 用户态控制面，负责配置、API、Web 控制台、TUI、持久化、审计、告警与 Hub 同步。 |
+| `xuanarmor-common` | 数据面与控制面共享的结构体、常量与纯函数。 |
+| `xuanarmor-hub` | 分布式策略聚合服务，负责多节点策略共享、节点注册与每节点 Token 管理。 |
 | `xtask` | 构建任务封装，固定 eBPF 工具链与目标平台。 |
 
 ## 2. 能力范围
@@ -146,17 +150,17 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 | 能力 | 说明 |
 |---|---|
 | Web 控制台 | Vue 3 + TypeScript 单文件 SPA（`console/`），跟随系统亮/暗色，文本导航、命令面板与高密度表格。 |
-| CLI 与 TUI | `eshield start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach`。 |
+| CLI 与 TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach`。 |
 | 配置热加载 | 通过 `SIGHUP` 或 `systemctl reload` 重新加载配置。 |
 | 认证与 RBAC-lite | 可选 Bearer Token；v0.5.0 新增只读 Token（只允许 GET/HEAD），本机回环请求跳过 Token 校验。 |
 | 持久化 | 动态规则与时序指标写入 redb，进程重启后恢复。 |
 | 审计 | 内存或 JSON Lines 审计后端（带 `seq`/`prev_hash`/`hash` 哈希链），支持 SSE 实时流、CSV 导出与 `GET /api/audit/verify` 防篡改校验。 |
 | 指标 | Prometheus `/metrics`、JSON `/api/stats`、map 水位 `/api/map-usage`。 |
-| 平滑升级 | 进程退出时保留 XDP 挂载，升级/重启期间数据面不中断；`eshield upgrade` 自动备份、健康检查与失败回滚。 |
+| 平滑升级 | 进程退出时保留 XDP 挂载，升级/重启期间数据面不中断；`xuanarmor upgrade` 自动备份、健康检查与失败回滚。 |
 | 安装与生命周期 | `scripts/install.sh` 支持 `--version`、`--sha256`、`--rollback`、`--uninstall`，升级前自动备份。 |
 | 告警 | 支持 Webhook 告警与阈值、冷却时间配置。 |
 | 分布式策略 | Hub 聚合多节点策略；支持 master token 与每节点 Token。 |
-| 内核兼容 | 固定 `nightly-2026-07-31` 与 `bpf-linker 0.10.4`；支持 `ESHIELD_XDP_MODE=skb` 规避虚拟网卡原生 XDP 问题。 |
+| 内核兼容 | 固定 `nightly-2026-07-31` 与 `bpf-linker 0.10.4`；支持 `XUANARMOR_XDP_MODE=skb` 规避虚拟网卡原生 XDP 问题。 |
 
 ## 3. 系统架构
 
@@ -208,11 +212,11 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 
 | 变量 | 作用 |
 |---|---|
-| `ESHIELD_EBPF_TOOLCHAIN` | 覆盖 eBPF 构建使用的 nightly 工具链。 |
-| `ESHIELD_XDP_MODE` | 设为 `skb` 或 `generic` 时强制 SKB 通用模式挂载。 |
-| `ESHIELD_INTERFACE` | 覆盖配置中的监听网卡。 |
-| `ESHIELD_ALLOW_LOW_MEMORY` | 设为 `1` 时跳过 `[limits].refuse_memory_mb` 的启动内存预检（不推荐）。 |
-| `ESHIELD_ASSUME_TLS_PROXY` | 设为 `1` 表示控制台已由 TLS 反代终结，关闭明文 HTTP 告警。 |
+| `XUANARMOR_EBPF_TOOLCHAIN` | 覆盖 eBPF 构建使用的 nightly 工具链。 |
+| `XUANARMOR_XDP_MODE` | 设为 `skb` 或 `generic` 时强制 SKB 通用模式挂载。 |
+| `XUANARMOR_INTERFACE` | 覆盖配置中的监听网卡。 |
+| `XUANARMOR_ALLOW_LOW_MEMORY` | 设为 `1` 时跳过 `[limits].refuse_memory_mb` 的启动内存预检（不推荐）。 |
+| `XUANARMOR_ASSUME_TLS_PROXY` | 设为 `1` 表示控制台已由 TLS 反代终结，关闭明文 HTTP 告警。 |
 
 Windows 主机无法直接构建或运行本项目。构建与测试应在 WSL2、Linux 虚拟机或 Linux 云主机中进行。
 
@@ -228,27 +232,27 @@ sudo bash scripts/install.sh --build
 
 1. 使用固定 nightly 工具链构建 eBPF 程序。
 2. 使用 musl target 静态构建用户态二进制。
-3. 安装 `eshield` 到 `/usr/local/bin`。
-4. 创建默认配置 `/etc/eshield/config.toml`（升级时不会覆盖已有配置）。
+3. 安装 `xuanarmor` 到 `/usr/local/bin`。
+4. 创建默认配置 `/etc/xuanarmor/config.toml`（升级时不会覆盖已有配置）。
 5. 安装并启用 systemd 服务。
 
-升级、回滚与卸载（v0.5.1）：
+升级、回滚与卸载（v0.6.0）：
 
 ```bash
-# 已安装 v0.5.1+ 时，install.sh 会调用 eshield upgrade：
+# 已安装 v0.6.0+ 时，install.sh 会调用 xuanarmor upgrade：
 #   旧进程退出期间 XDP 保持挂载，新进程启动时原子替换程序；健康检查失败自动回滚。
 # 也可直接使用 CLI（同一流程）：
-sudo eshield upgrade --binary /path/to/new/eshield --config /etc/eshield/config.toml
+sudo xuanarmor upgrade --binary /path/to/new/xuanarmor --config /etc/xuanarmor/config.toml
 
-# 升级到指定版本；升级前自动备份到 /var/lib/eshield/backup/<时间戳>/
+# 升级到指定版本；升级前自动备份到 /var/lib/xuanarmor/backup/<时间戳>/
 sudo bash scripts/install.sh --version 0.5.1
 sudo bash scripts/install.sh --version 0.5.1 --sha256 <官方 SHA256>
 
 # 回滚到最近一次备份（或指定备份目录）
 sudo bash scripts/install.sh --rollback
-sudo bash scripts/install.sh --rollback /var/lib/eshield/backup/20261030-090000
+sudo bash scripts/install.sh --rollback /var/lib/xuanarmor/backup/20261030-090000
 
-# 卸载（默认保留 /etc/eshield 与数据；--purge 一并删除）
+# 卸载（默认保留 /etc/xuanarmor 与数据；--purge 一并删除）
 sudo bash scripts/install.sh --uninstall
 sudo bash scripts/install.sh --uninstall --purge
 ```
@@ -258,19 +262,19 @@ sudo bash scripts/install.sh --uninstall --purge
 ### 5.2 手动构建
 
 ```bash
-export ESHIELD_EBPF_TOOLCHAIN=nightly-2026-07-31
+export XUANARMOR_EBPF_TOOLCHAIN=nightly-2026-07-31
 
 cargo xtask build-ebpf
-cargo build --package eshield --target x86_64-unknown-linux-musl --release
-cargo build --package eshield-hub --release
+cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
+cargo build --package xuanarmor-hub --release
 ```
 
 构建产物：
 
 ```text
-target/x86_64-unknown-linux-musl/release/eshield
-target/release/eshield-hub
-target/bpfel-unknown-none/release/eshield
+target/x86_64-unknown-linux-musl/release/xuanarmor
+target/release/xuanarmor-hub
+target/bpfel-unknown-none/release/xuanarmor
 ```
 
 eBPF 目标文件由 `include_bytes_aligned!` 嵌入用户态二进制，部署时仅需分发用户态可执行文件。
@@ -324,19 +328,19 @@ window_ms = 10000
 ### 6.2 启动
 
 ```bash
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 ```
 
-控制台默认监听 `http://<host>:8720/`。未设置 `api_token` 时，系统生成随机 Token 并在日志中输出前缀；可通过 `eshield reset-token` 重置。
+控制台默认监听 `http://<host>:8720/`。未设置 `api_token` 时，系统生成随机 Token 并在日志中输出前缀；可通过 `xuanarmor reset-token` 重置。
 
 ### 6.3 systemd 管理
 
 ```bash
-sudo systemctl start eshield
-sudo systemctl status eshield
-sudo systemctl stop eshield
-sudo systemctl reload eshield
-sudo journalctl -u eshield -f
+sudo systemctl start xuanarmor
+sudo systemctl status xuanarmor
+sudo systemctl stop xuanarmor
+sudo systemctl reload xuanarmor
+sudo journalctl -u xuanarmor -f
 ```
 
 `reload` 触发 `SIGHUP`，重新加载配置文件，不中断 XDP 挂载。
@@ -346,14 +350,14 @@ sudo journalctl -u eshield -f
 在 veth、bridge 等虚拟网卡上，原生 XDP_TX 可能触发内核异常。测试环境建议：
 
 ```bash
-ESHIELD_XDP_MODE=skb sudo eshield start --config /etc/eshield/config.toml
+XUANARMOR_XDP_MODE=skb sudo xuanarmor start --config /etc/xuanarmor/config.toml
 ```
 
-集成测试脚本通过 `ESHIELD_TEST_XDP_MODE=skb` 统一使用 SKB 模式。
+集成测试脚本通过 `XUANARMOR_TEST_XDP_MODE=skb` 统一使用 SKB 模式。
 
 ## 7. 配置参考
 
-默认配置路径为 `/etc/eshield/config.toml`。
+默认配置路径为 `/etc/xuanarmor/config.toml`。
 
 | 配置段 / 字段 | 作用 |
 |---|---|
@@ -362,7 +366,7 @@ ESHIELD_XDP_MODE=skb sudo eshield start --config /etc/eshield/config.toml
 | `api_token` | 读写 Bearer Token；未设置时生成随机 Token。 |
 | `readonly_token` | **v0.5.0**：只读 Token，仅允许 GET/HEAD/OPTIONS，写操作 403。 |
 | `whitelist` / `blacklist` | 启动时加载的静态 CIDR 白名单与永久黑名单。 |
-| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）、分片策略 `fragment_policy`（v0.5.0）与平滑升级相关 `persist_link`/`pin_path`（v0.5.1）。 |
+| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）、分片策略 `fragment_policy`（v0.5.0）与平滑升级相关 `persist_link`/`pin_path`（v0.6.0）。 |
 | `[limits]` | **v0.5.0**：启动内存预检（`min_memory_mb` 告警、`refuse_memory_mb` 拒绝启动）。 |
 | `[rate_limit]` | per-IP 指数衰减速率限制、触发封禁时长与 `block_mode`（hard/soft，v0.5.0）。 |
 | `[port_rate_limit]` | 按协议与目的端口的固定窗口限速，**v0.5.0 起默认开启**。 |
@@ -395,32 +399,32 @@ ESHIELD_XDP_MODE=skb sudo eshield start --config /etc/eshield/config.toml
 
 ```bash
 # 启动守护进程
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 
 # 查看本机状态
-eshield status
+xuanarmor status
 
 # 封禁 IP；duration 为 0 表示永久
-eshield block 192.0.2.1 --duration 300
+xuanarmor block 192.0.2.1 --duration 300
 
 # 解封 IP
-eshield unblock 192.0.2.1
+xuanarmor unblock 192.0.2.1
 
 # 重新加载配置
-eshield reload
+xuanarmor reload
 
 # 校验配置
-eshield check --config /etc/eshield/config.toml
+xuanarmor check --config /etc/xuanarmor/config.toml
 
 # 启动 TUI
-eshield tui
+xuanarmor tui
 
 # 远程 API
-eshield status --endpoint http://eshield-host:8720
-eshield block 192.0.2.1 --endpoint http://eshield-host:8720
+xuanarmor status --endpoint http://xuanarmor-host:8720
+xuanarmor block 192.0.2.1 --endpoint http://xuanarmor-host:8720
 
 # 重置控制台 Token
-eshield reset-token
+xuanarmor reset-token
 ```
 
 ### 8.2 认证与角色
@@ -436,18 +440,18 @@ eshield reset-token
 ### 8.3 热加载
 
 ```bash
-sudo systemctl reload eshield
-sudo kill -HUP $(pidof eshield)
+sudo systemctl reload xuanarmor
+sudo kill -HUP $(pidof xuanarmor)
 ```
 
 ## 9. 分布式 Hub
 
-`eshield-hub` 用于多节点策略聚合与共享。
+`xuanarmor-hub` 用于多节点策略聚合与共享。
 
 ### 9.1 启动 Hub
 
 ```bash
-eshield-hub --bind 0.0.0.0:9930 --token "master-token"
+xuanarmor-hub --bind 0.0.0.0:9930 --token "master-token"
 ```
 
 生产环境应在 Hub 前部署 TLS 终止层，例如 nginx 或 Caddy。
@@ -455,9 +459,9 @@ eshield-hub --bind 0.0.0.0:9930 --token "master-token"
 ### 9.2 每节点 Token
 
 ```bash
-eshield-hub --bind 0.0.0.0:9930 \
+xuanarmor-hub --bind 0.0.0.0:9930 \
   --token "master-token" \
-  --node-tokens-file /etc/eshield-hub/node-tokens
+  --node-tokens-file /etc/xuanarmor-hub/node-tokens
 ```
 
 `node-tokens` 文件每行格式为 `node_name:token`，支持 `#` 注释与空行。节点专属 Token 认证成功后，Hub 使用认证节点名记录策略与限流，避免请求体伪造 `node_name`。master token 保持兼容。
@@ -516,21 +520,21 @@ http://<host>:8720/metrics
 
 主要指标包括：
 
-- `eshield_dropped_total`
-- `eshield_passed_total`
-- `eshield_blacklist_blocked_total`
-- `eshield_rate_limited_total`
-- `eshield_syn_flood_blocked_total`
-- `eshield_udp_flood_blocked_total`
-- `eshield_icmp_flood_blocked_total`
-- `eshield_geoip_blocked_total`
-- `eshield_conn_track_blocked_total`
-- `eshield_dropped_by_protocol_total`
-- `eshield_dropped_by_port_total`
-- `eshield_source_dropped_total`
-- **v0.5.0 新增**：`eshield_map_usage_ratio{name}`、`eshield_map_entries{name}`、
-  `eshield_map_max_entries{name}`、`eshield_fragment_blocked_total{policy}`、
-  `eshield_port_rate_blocked_total`
+- `xuanarmor_dropped_total`
+- `xuanarmor_passed_total`
+- `xuanarmor_blacklist_blocked_total`
+- `xuanarmor_rate_limited_total`
+- `xuanarmor_syn_flood_blocked_total`
+- `xuanarmor_udp_flood_blocked_total`
+- `xuanarmor_icmp_flood_blocked_total`
+- `xuanarmor_geoip_blocked_total`
+- `xuanarmor_conn_track_blocked_total`
+- `xuanarmor_dropped_by_protocol_total`
+- `xuanarmor_dropped_by_port_total`
+- `xuanarmor_source_dropped_total`
+- **v0.5.0 新增**：`xuanarmor_map_usage_ratio{name}`、`xuanarmor_map_entries{name}`、
+  `xuanarmor_map_max_entries{name}`、`xuanarmor_fragment_blocked_total{policy}`、
+  `xuanarmor_port_rate_blocked_total`
 
 map 水位的 JSON 视图为 `GET /api/map-usage`；告警规则示例见
 [docs/operations.md](docs/operations.md)。
@@ -553,13 +557,13 @@ curl -H "Authorization: Bearer <token>" http://<host>:8720/api/stats | jq
 
 ```bash
 curl -s -H "Authorization: Bearer <token>" http://<host>:8720/api/audit/verify
-# {"ok":true,"checked":1024,"first_bad_seq":null,"path":"/var/log/eshield/audit.log"}
+# {"ok":true,"checked":1024,"first_bad_seq":null,"path":"/var/log/xuanarmor/audit.log"}
 ```
 
 ### 10.5 TUI
 
 ```bash
-eshield tui
+xuanarmor tui
 ```
 
 ## 11. 性能特征
@@ -623,7 +627,7 @@ v0.5.0 的实测单包成本、真实两机攻击数据、内存占用与容量�
 ### 12.1 单元测试
 
 ```bash
-cargo test --workspace --exclude eshield-ebpf
+cargo test --workspace --exclude xuanarmor-ebpf
 ```
 
 ### 12.2 集成测试
@@ -631,9 +635,9 @@ cargo test --workspace --exclude eshield-ebpf
 集成测试需要 root 权限，并在 network namespace 中运行。虚拟网卡环境建议使用 SKB 模式。
 
 ```bash
-sudo ESHIELD_TEST_XDP_MODE=skb bash tests/netns_test.sh
-sudo ESHIELD_XDP_MODE=skb bash tests/hub_node_test.sh
-sudo ESHIELD_XDP_MODE=skb bash tests/full_attack_test.sh
+sudo XUANARMOR_TEST_XDP_MODE=skb bash tests/netns_test.sh
+sudo XUANARMOR_XDP_MODE=skb bash tests/hub_node_test.sh
+sudo XUANARMOR_XDP_MODE=skb bash tests/full_attack_test.sh
 
 # SYN Proxy 兜底：带 TCP 选项的 SYN Flood 必须被丢弃（不直通内核）
 sudo SKIP_BUILD=1 bash tests/syn_proxy_options_test.sh
@@ -655,8 +659,8 @@ sudo SKIP_BUILD=1 bash tests/syn_proxy_options_test.sh
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --exclude eshield-ebpf -- -D warnings
-cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
+cargo clippy --workspace --exclude xuanarmor-ebpf -- -D warnings
+cargo +nightly-2026-07-31 clippy --package xuanarmor-ebpf \
   --target bpfel-unknown-none -Z build-std=core -- -D warnings
 ```
 
@@ -664,10 +668,10 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 
 ```text
 .
-├── eshield/            # 用户态控制面、Web 控制台、CLI、TUI
-├── eshield-ebpf/       # eBPF/XDP 数据面
-├── eshield-common/     # 共享结构体、常量与纯函数
-├── eshield-hub/        # 分布式策略 Hub
+├── xuanarmor/            # 用户态控制面、Web 控制台、CLI、TUI
+├── xuanarmor-ebpf/       # eBPF/XDP 数据面
+├── xuanarmor-common/     # 共享结构体、常量与纯函数
+├── xuanarmor-hub/        # 分布式策略 Hub
 ├── xtask/              # eBPF 构建任务
 ├── scripts/            # 安装、卸载、基准与发布脚本
 ├── tests/              # 单元与集成测试脚本
@@ -695,11 +699,11 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 - **防护项目范围**：数据面仅匹配 IPv4 精确 IP，CIDR 由控制面展开，下限 `/24`，项目上限 8192 条。
 - **规则容量限制**：`port_acl` 上限 32 条，`l7_scan.patterns` 上限 8 条，用于满足内核 7.0 verifier 的指令处理限制。
 - **最小内存规格**：`[limits].refuse_memory_mb`（默认 256MB）以下拒绝启动，`min_memory_mb`（默认 512MB）以下告警；
-  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
-- **虚拟网卡限制**：veth 等虚拟网卡的原生 XDP_TX 存在内核异常风险，测试环境应使用 `ESHIELD_XDP_MODE=skb`。
+  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `XUANARMOR_ALLOW_LOW_MEMORY=1` 长期绕过。
+- **虚拟网卡限制**：veth 等虚拟网卡的原生 XDP_TX 存在内核异常风险，测试环境应使用 `XUANARMOR_XDP_MODE=skb`。
 - **平台限制**：不支持 Windows；不支持无 BTF 的内核。
 - **物理网卡基准缺失**：当前公开基准基于 veth，物理网卡、多队列、小包 pps 与延迟需在目标环境实测。
-- **Hub 非高可用**：`eshield-hub` 是单实例有状态服务，需要自行备份；节点侧在 Hub 不可用时仍可本地自治。
+- **Hub 非高可用**：`xuanarmor-hub` 是单实例有状态服务，需要自行备份；节点侧在 Hub 不可用时仍可本地自治。
 
 ## 15. 文档索引
 

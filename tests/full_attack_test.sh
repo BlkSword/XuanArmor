@@ -5,11 +5,11 @@ set -e
 
 PACKETS="${PACKETS:-100000}"
 DURATION="${DURATION:-5}"
-SERVER_NS="eshield-server"
-CLIENT_NS="eshield-client"
+SERVER_NS="xuanarmor-server"
+CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 CLIENT_IP="10.0.0.2"
-ESHIELD_BIN="${ESHIELD_BIN:-./target/x86_64-unknown-linux-musl/release/eshield}"
+XUANARMOR_BIN="${XUANARMOR_BIN:-./target/x86_64-unknown-linux-musl/release/xuanarmor}"
 
 if [ "$EUID" -ne 0 ]; then
     echo "请使用 sudo 运行"
@@ -18,12 +18,12 @@ fi
 
 cleanup() {
     echo "[cleanup] 清理 netns 和后台进程..."
-    kill $HTTP_PID $ESHIELD_PID 2>/dev/null || true
+    kill $HTTP_PID $XUANARMOR_PID 2>/dev/null || true
     wait $HTTP_PID 2>/dev/null || true
-    wait $ESHIELD_PID 2>/dev/null || true
+    wait $XUANARMOR_PID 2>/dev/null || true
     ip netns del "$SERVER_NS" 2>/dev/null || true
     ip netns del "$CLIENT_NS" 2>/dev/null || true
-    rm -f /tmp/eshield-attack-test.toml /tmp/eshield-attack-test.redb
+    rm -f /tmp/xuanarmor-attack-test.toml /tmp/xuanarmor-attack-test.redb
 }
 trap cleanup EXIT
 
@@ -46,15 +46,15 @@ ip netns exec "$SERVER_NS" ip link set lo up
 ip netns exec "$CLIENT_NS" ip link set lo up
 
 # 确保没有旧持久化规则影响测试
-rm -f /tmp/eshield-attack-test.redb
+rm -f /tmp/xuanarmor-attack-test.redb
 
 # 2. 生成 XuanArmor 配置
-cat > /tmp/eshield-attack-test.toml <<EOF
+cat > /tmp/xuanarmor-attack-test.toml <<EOF
 interface = "veth-server"
 web_bind = "0.0.0.0:8443"
 log_level = "info"
 log_json = false
-store_path = "/tmp/eshield-attack-test.redb"
+store_path = "/tmp/xuanarmor-attack-test.redb"
 
 whitelist = ["${SERVER_IP}/32", "127.0.0.1/32"]
 blacklist = []
@@ -73,7 +73,7 @@ enabled = false
 EOF
 
 # 3. 在防御端启动一个支持并发的轻量 HTTP 服务（用于对比允许流量）
-ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/eshield-http-server.log 2>&1 &
+ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/xuanarmor-http-server.log 2>&1 &
 import socketserver, http.server, sys
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -85,8 +85,8 @@ HTTP_PID=$!
 sleep 1
 
 # 4. 启动 XuanArmor
-ip netns exec "$SERVER_NS" "$ESHIELD_BIN" start --config /tmp/eshield-attack-test.toml >/tmp/eshield-attack-test.log 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$SERVER_NS" "$XUANARMOR_BIN" start --config /tmp/xuanarmor-attack-test.toml >/tmp/xuanarmor-attack-test.log 2>&1 &
+XUANARMOR_PID=$!
 
 # 等待就绪
 for i in {1..30}; do

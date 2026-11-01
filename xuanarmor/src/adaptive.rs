@@ -1,0 +1,192 @@
+use aya::maps::HashMap as LruHashMap;
+use aya::Ebpf;
+use xuanarmor_common::{rules, BlockEntry, IpKey, BLOCK_PERMANENT};
+use std::sync::atomic::Ordering;
+
+use crate::config::AdaptiveConfig;
+use crate::ip::format_ip_key;
+use crate::state::Stats;
+
+/// 用户态自适应阈值引擎：根据 Ring Buffer 中的 DROP 事件，
+/// 对短时间窗口内多次触发规则的源 IP 追加动态黑名单。
+pub struct AdaptiveEngine {
+    config: std::sync::RwLock<AdaptiveConfig>,
+    /// 每个 IP 的最近事件窗口：(时间戳秒, 该秒内事件数)，用于滑动窗口计数。
+    /// 使用加权计数避免每个事件都产生一次 DashMap 写入。
+    windows: dashmap::DashMap<IpKey, Vec<(u64, u64)>>,
+    /// 已自适应封禁的 IP 及其解封时间戳（秒）
+    blocked: dashmap::DashMap<IpKey, u64>,
+}
+
+impl AdaptiveEngine {
+    pub fn new(config: AdaptiveConfig) -> Self {
+        Self {
+            config: std::sync::RwLock::new(config),
+            windows: dashmap::DashMap::new(),
+            blocked: dashmap::DashMap::new(),
+        }
+    }
+
+    /// 热更新自适应阈值配置。
+    pub fn update_config(&self, config: AdaptiveConfig) {
+        if let Ok(mut c) = self.config.write() {
+            *c = config;
+        }
+    }
+
+    /// 当前是否启用。
+    pub fn is_enabled(&self) -> bool {
+        self.config.read().map(|c| c.enabled).unwrap_or(false)
+    }
+
+    /// 批量处理同一源 IP 的 DROP 事件（count 为事件数）。
+    /// 事件消费端先按源聚合再调用，避免每个事件都写一次 DashMap。
+    pub fn on_events(
+        &self,
+        stats: &Stats,
+        src_ip: IpKey,
+        count: u64,
+        ebpf: &mut Ebpf,
+    ) -> anyhow::Result<()> {
+        if count == 0 {
+            return Ok(());
+        }
+        let cfg = self.config.read().unwrap_or_else(|e| e.into_inner());
+        if !cfg.enabled {
+            return Ok(());
+        }
+
+        let now_s = now_s();
+        let window_s = cfg.window_s;
+        let threshold = cfg.threshold;
+        let block_duration_s = cfg.block_duration_s;
+
+        // 已封禁且未过期则跳过
+        if let Some(entry) = self.blocked.get(&src_ip) {
+            if *entry > now_s {
+                return Ok(());
+            }
+        }
+
+        // 滑动窗口加权计数：同一秒内的事件合并成 (timestamp, count)。
+        let mut window = self.windows.entry(src_ip).or_default();
+        window.retain(|(t, _)| now_s.saturating_sub(*t) <= window_s);
+        match window.last_mut() {
+            Some(last) if last.0 == now_s => {
+                last.1 = last.1.saturating_add(count);
+            }
+            _ => window.push((now_s, count)),
+        }
+        let total: u64 = window.iter().map(|(_, c)| *c).sum();
+
+        if total >= threshold {
+            let blocked_until_ns = if block_duration_s == 0 {
+                BLOCK_PERMANENT
+            } else {
+                let now_ns = crate::time::monotonic_ns();
+                let block_ns = block_duration_s.saturating_mul(1_000_000_000);
+                now_ns.saturating_add(block_ns)
+            };
+
+            let mut blacklist: LruHashMap<_, IpKey, BlockEntry> = ebpf
+                .map_mut("BLACKLIST")
+                .ok_or_else(|| anyhow::anyhow!("BLACKLIST map not found"))?
+                .try_into()?;
+
+            // 保留首次触发原因：若该源已被其它模块（速率限制/SYN Flood 等）封禁，
+            // 只记录「叠加原因=自适应」并延长到更晚的到期时间，不覆盖根因。
+            let now_ns = crate::time::monotonic_ns();
+            let entry = xuanarmor_common::pure::merge_block_entry(
+                blacklist.get(&src_ip, 0).ok(),
+                now_ns,
+                blocked_until_ns,
+                rules::ADAPTIVE as u8,
+                false,
+            );
+            blacklist.insert(src_ip, entry, 0)?;
+
+            // 记录封禁截止时间，避免重复写入 map；永久封禁用 u64::MAX 标记，
+            // 否则 prune() 会把永久条目当成过期条目清掉。
+            let until = if block_duration_s == 0 {
+                u64::MAX
+            } else {
+                now_s.saturating_add(block_duration_s)
+            };
+            self.blocked.insert(src_ip, until);
+            stats.adaptive_blocked.fetch_add(1, Ordering::Relaxed);
+
+            tracing::info!(
+                "adaptive block: src={} threshold={}/{}s duration={}s",
+                format_ip_key(&src_ip),
+                threshold,
+                window_s,
+                block_duration_s
+            );
+        }
+
+        Ok(())
+    }
+
+    /// 周期性清理：删除过期的滑动窗口与封禁记录，并给两个 DashMap 设置硬上限，
+    /// 防止伪造源 IP 的攻击把内存无限撑大。
+    pub fn prune(&self, now_s: u64) {
+        const MAX_ENTRIES: usize = 100_000;
+        let window_s = self.config.read().map(|c| c.window_s).unwrap_or(300);
+
+        let stale_windows: Vec<IpKey> = self
+            .windows
+            .iter()
+            .filter_map(|entry| {
+                let alive = entry
+                    .value()
+                    .iter()
+                    .any(|(t, _)| now_s.saturating_sub(*t) <= window_s);
+                if alive {
+                    None
+                } else {
+                    Some(*entry.key())
+                }
+            })
+            .collect();
+        for key in stale_windows {
+            self.windows.remove(&key);
+        }
+
+        let expired_blocks: Vec<IpKey> = self
+            .blocked
+            .iter()
+            .filter_map(|entry| {
+                if *entry.value() <= now_s {
+                    Some(*entry.key())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for key in expired_blocks {
+            self.blocked.remove(&key);
+        }
+
+        // 硬上限：优先从较大的 map 开始驱逐，直到两个 map 都回到上限内。
+        while self.windows.len() > MAX_ENTRIES || self.blocked.len() > MAX_ENTRIES {
+            let from_windows = self.windows.len() >= self.blocked.len();
+            let key = if from_windows {
+                self.windows.iter().next().map(|e| *e.key())
+            } else {
+                self.blocked.iter().next().map(|e| *e.key())
+            };
+            match key {
+                Some(key) => {
+                    self.windows.remove(&key);
+                    self.blocked.remove(&key);
+                }
+                None => break,
+            }
+        }
+    }
+}
+
+fn now_s() -> u64 {
+    // 与 eBPF 事件时间戳一致使用 CLOCK_MONOTONIC，避免 NTP 校时导致滑动窗口错乱
+    crate::time::monotonic_secs()
+}

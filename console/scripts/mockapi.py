@@ -10,7 +10,7 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8898
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "dist", "index.html")
 if not os.path.exists(APP):
-    APP = os.path.join(ROOT, "..", "eshield", "web", "app.html")
+    APP = os.path.join(ROOT, "..", "xuanarmor", "web", "app.html")
 APP_BYTES = open(APP, "rb").read()
 
 STATS = {
@@ -43,7 +43,7 @@ MAP_USAGE = {
     # 服务端返回 CLOCK_MONOTONIC 纳秒；演示值取「已运行 1 天」
     "sampled_ns": 86400000000000,
 }
-AUDIT_VERIFY = {"ok": True, "checked": 60, "first_bad_seq": None, "path": "/var/log/eshield/audit.log"}
+AUDIT_VERIFY = {"ok": True, "checked": 60, "first_bad_seq": None, "path": "/var/log/xuanarmor/audit.log"}
 SERIES = [{"timestamp": 1791180000 + i * 60, "pps": 900000 + i * 1000, "dps": 20000 + i * 10,
            "timestamp_ns": (1791180000 + i * 60) * 1000000000} for i in range(60)]
 MODULES = {"modules": [
@@ -65,17 +65,17 @@ WHITELIST = {"entries": [{"cidr": "10.0.0.0/8", "note": "内网"}], "count": 1}
 ACL = {"items": [{"protocol": "tcp", "dport": "3306", "action": "deny"}]}
 L7 = {"patterns": [{"pattern": "GET /"}, {"pattern": "eval("}]}
 PROJECTS = {"projects": [{"name": "web-public", "description": "Web", "protocol": "tcp", "dport": "80,443", "target_ips": ["172.23.83.42/32"], "enabled_modules": ["l7_scan"], "action": "defend"}]}
-CONFIG = {"version": "0.5.1", "interface": "eth0", "web_bind": "0.0.0.0:8720", "store_path": "/var/lib/eshield/rules.redb",
+CONFIG = {"version": "0.6.0", "interface": "eth0", "web_bind": "0.0.0.0:8720", "store_path": "/var/lib/xuanarmor/rules.redb",
           "rate_limit_enabled": True, "syn_proxy_enabled": True, "l7_scan_enabled": True, "udp_flood_enabled": True,
           "icmp_flood_enabled": True, "geoip_enabled": False, "geoip_default_action": 0, "conn_track_enabled": False,
           "conn_track_threshold": 100, "conn_track_window_ms": 10000, "trust_enabled": True, "tcp_reset_on_drop": False,
           "danger_level": 2, "protection_projects_enabled": True,
           # v0.5.0：分片策略 / 限速处置模式 / 审计文件 / 端口聚合限速（默认启用）
           "fragment_policy": "rate_limit", "rate_limit_block_mode": "hard",
-          "audit_path": "/var/log/eshield/audit.log", "audit_enabled": True,
+          "audit_path": "/var/log/xuanarmor/audit.log", "audit_enabled": True,
           "rate_limit": {"enabled": True, "threshold": 200, "tick_ms": 100, "decay_num": 7, "decay_den": 8, "block_duration_s": 300},
           "port_rate_limit": {"enabled": True, "threshold": 2000, "tick_ms": 100}}
-HUB_STATUS = {"connected": True, "url": "wss://hub.eshield.local:9930"}
+HUB_STATUS = {"connected": True, "url": "wss://hub.xuanarmor.local:9930"}
 HUB_NODES = {"nodes": [{"node_name": "edge-api-01", "ip": "172.23.83.42", "version": "0.5.0", "status": "online", "policies": 18, "last_seen": "6s"}]}
 IP_DETAIL = {"ip": "203.0.113.9", "blacklisted": True, "hit_count": 9812443, "trust_score": 3, "trust_level": 3,
              "drop_count": 9812443, "pass_count": 12, "top_ports": [{"port": 80, "count": 9812443}],

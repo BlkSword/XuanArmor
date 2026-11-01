@@ -18,28 +18,28 @@
 
 ```bash
 # 查看状态
-eshield status
+xuanarmor status
 
 # 实时封禁 IP（300 秒）
-eshield block 192.0.2.1 --duration 300
+xuanarmor block 192.0.2.1 --duration 300
 
 # 永久封禁
-eshield block 192.0.2.1
+xuanarmor block 192.0.2.1
 
 # 解封
-eshield unblock 192.0.2.1
+xuanarmor unblock 192.0.2.1
 
 # IPv6 同样支持
-eshield block 2001:db8::1 --duration 600
+xuanarmor block 2001:db8::1 --duration 600
 
 # 重载配置
-eshield reload
+xuanarmor reload
 
 # 校验配置（不启动、不做内存预检）
-eshield check --config /etc/eshield/config.toml
+xuanarmor check --config /etc/xuanarmor/config.toml
 
 # 启动 TUI 仪表盘
-eshield tui
+xuanarmor tui
 
 # 查看当前版本（本机免 token）
 curl -s http://127.0.0.1:8720/api/config | jq -r .version
@@ -58,14 +58,14 @@ sudo bash scripts/install.sh --help
 |---|---|
 | `--build` | 从当前源码构建并安装（默认从 GitHub Release 下载）。 |
 | `--version <x.y.z>` | 指定安装/升级的版本号（默认取仓库版本或 Release；`--build` 时实际版本以源码 `Cargo.toml` 为准）。 |
-| `--sha256 <hex>` | 校验下载产物的 SHA256；也可用环境变量 `ESHIELD_EXPECTED_SHA`。仅对下载安装生效，`--build` 不校验。 |
+| `--sha256 <hex>` | 校验下载产物的 SHA256；也可用环境变量 `XUANARMOR_EXPECTED_SHA`。仅对下载安装生效，`--build` 不校验。 |
 | `--rollback [dir]` | 回滚到指定备份目录；省略目录时回滚到**最近一次**备份。 |
 | `--uninstall` | 卸载：停止并禁用服务、移除二进制与 systemd 单元，**默认保留**配置与数据。 |
-| `--purge` | 与 `--uninstall` 搭配：额外删除 `/etc/eshield`、持久化数据目录与 `/var/log/eshield`。 |
+| `--purge` | 与 `--uninstall` 搭配：额外删除 `/etc/xuanarmor`、持久化数据目录与 `/var/log/xuanarmor`。 |
 
 ### 升级
 
-v0.5.1 起默认 `[xdp].persist_link = true`：进程退出时**不摘除** XDP 程序，新进程启动时由内核
+v0.6.0 起默认 `[xdp].persist_link = true`：进程退出时**不摘除** XDP 程序，新进程启动时由内核
 原子替换程序，因此升级/重启期间数据面不中断（旧程序持续过滤，直到新程序接管）。
 控制面（HTTP/控制台）在重启瞬间有短暂不可用。
 
@@ -79,44 +79,44 @@ sudo bash scripts/install.sh --version 0.5.1 --sha256 <官方发布的 sha256>
 # 3) 升级后确认版本与状态
 curl -s http://127.0.0.1:8720/api/config | jq -r .version
 curl -s http://127.0.0.1:8720/ready
-sudo systemctl status eshield
-sudo eshield check --config /etc/eshield/config.toml
+sudo systemctl status xuanarmor
+sudo xuanarmor check --config /etc/xuanarmor/config.toml
 ```
 
 升级流程（脚本行为）：
 
-1. 检测到已安装的 `eshield` 时，**先备份**当前二进制、配置与 systemd 单元到
-   `/var/lib/eshield/backup/<YYYYmmdd-HHMMSS>/`（可用 `ESHIELD_BACKUP_DIR` 覆盖根目录），
+1. 检测到已安装的 `xuanarmor` 时，**先备份**当前二进制、配置与 systemd 单元到
+   `/var/lib/xuanarmor/backup/<YYYYmmdd-HHMMSS>/`（可用 `XUANARMOR_BACKUP_DIR` 覆盖根目录），
    只保留最近 **5** 份；
 2. 停止旧服务（避免覆盖正在运行的二进制）；
 3. 下载/构建新版本，校验 ELF 头与 `SHA256SUMS`（设置了 `--sha256` 时再校验指定哈希）；
-4. 安装二进制到 `/usr/local/bin/eshield`；**已存在的 `/etc/eshield/config.toml` 不会被覆盖**；
+4. 安装二进制到 `/usr/local/bin/xuanarmor`；**已存在的 `/etc/xuanarmor/config.toml` 不会被覆盖**；
 5. `daemon-reload` 并启动服务。
 
 备份目录内容：
 
 ```text
-/var/lib/eshield/backup/20261031-120000/
-├── eshield            # 旧二进制
+/var/lib/xuanarmor/backup/20261031-120000/
+├── xuanarmor            # 旧二进制
 ├── config.toml        # 旧配置
-├── eshield.service    # 旧 systemd 单元
+├── xuanarmor.service    # 旧 systemd 单元
 └── VERSION            # 旧版本号
 ```
 
-### 平滑升级（v0.5.1）
+### 平滑升级（v0.6.0）
 
-`scripts/install.sh` 检测到已安装 v0.5.1+ 时，会优先调用已安装二进制的 `upgrade` 子命令完成替换；
+`scripts/install.sh` 检测到已安装 v0.6.0+ 时，会优先调用已安装二进制的 `upgrade` 子命令完成替换；
 也可手动执行：
 
 ```bash
 # 新二进制可以是下载到临时目录的发布产物
-sudo eshield upgrade --binary /tmp/eshield-0.5.1 --config /etc/eshield/config.toml
+sudo xuanarmor upgrade --binary /tmp/xuanarmor-0.5.1 --config /etc/xuanarmor/config.toml
 
 # 指定备份根目录 / 健康检查超时
-sudo eshield upgrade --binary /tmp/eshield-0.5.1 --backup-dir /var/lib/eshield/backup --timeout 30
+sudo xuanarmor upgrade --binary /tmp/xuanarmor-0.5.1 --backup-dir /var/lib/xuanarmor/backup --timeout 30
 
 # 回滚到某个备份目录
-sudo eshield upgrade --rollback /var/lib/eshield/backup/20261031-120000
+sudo xuanarmor upgrade --rollback /var/lib/xuanarmor/backup/20261031-120000
 ```
 
 行为：
@@ -133,12 +133,12 @@ sudo eshield upgrade --rollback /var/lib/eshield/backup/20261031-120000
 | 配置 | 说明 |
 |---|---|
 | `persist_link = true`（默认） | 退出时保留 XDP 挂载（fail-closed）；设为 `false` 恢复 v0.5.0 的「退出即卸载」行为。 |
-| `pin_path = "/sys/fs/bpf"` | pinned link 所在的 bpffs 目录；容器内需显式挂载 bpffs。若该路径不可用，进程会尝试 `/run/eshield-bpf`（不存在时自动挂载）。 |
+| `pin_path = "/sys/fs/bpf"` | pinned link 所在的 bpffs 目录；容器内需显式挂载 bpffs。若该路径不可用，进程会尝试 `/run/xuanarmor-bpf`（不存在时自动挂载）。 |
 
 停止服务后如需彻底摘除 XDP 程序：
 
 ```bash
-sudo eshield detach --config /etc/eshield/config.toml
+sudo xuanarmor detach --config /etc/xuanarmor/config.toml
 # 等价于：删除 pinned link + ip link set dev <iface> xdp off
 ```
 
@@ -149,7 +149,7 @@ sudo eshield detach --config /etc/eshield/config.toml
 sudo bash scripts/install.sh --rollback
 
 # 或指定备份目录
-sudo bash scripts/install.sh --rollback /var/lib/eshield/backup/20261030-090000
+sudo bash scripts/install.sh --rollback /var/lib/xuanarmor/backup/20261030-090000
 
 # 回滚后确认
 curl -s http://127.0.0.1:8720/ready
@@ -168,11 +168,11 @@ sudo bash scripts/install.sh --uninstall
 sudo bash scripts/install.sh --uninstall --purge
 ```
 
-`--purge` 删除的目录：`/etc/eshield`、`store_path` 所在目录（默认 `/var/lib/eshield`）、
-`/var/log/eshield`。卸载不会自动删除 `/var/lib/eshield/backup`（除非落在被删目录内），
+`--purge` 删除的目录：`/etc/xuanarmor`、`store_path` 所在目录（默认 `/var/lib/xuanarmor`）、
+`/var/log/xuanarmor`。卸载不会自动删除 `/var/lib/xuanarmor/backup`（除非落在被删目录内），
 需要时手工清理。
 
-> 卸载前建议先备份：`sudo tar czf eshield-backup.tar.gz /etc/eshield /var/lib/eshield`。
+> 卸载前建议先备份：`sudo tar czf xuanarmor-backup.tar.gz /etc/xuanarmor /var/lib/xuanarmor`。
 
 ## 认证与只读 Token（RBAC-lite，v0.5.0）
 
@@ -207,7 +207,7 @@ curl -X POST -H "Authorization: Bearer $READONLY_TOKEN" \
 - 只读 Token 不能用于控制台登录（`POST /api/auth/login` 只校验 `api_token`）；
   唯一的写方法例外是 `POST /api/auth/logout`（用于清理浏览器会话 Cookie）。
 - 修改 `api_token` / `readonly_token` 后需要**重启**服务生效（SIGHUP 热加载不会更新认证凭据）。
-- 两个 Token 都不要写进仓库；建议 `chmod 600 /etc/eshield/config.toml`。
+- 两个 Token 都不要写进仓库；建议 `chmod 600 /etc/xuanarmor/config.toml`。
 - 只读 Token 泄露仍可读取全部统计与审计查询结果，按"只给需要的监控系统"发放。
 
 ## 审计哈希链校验（v0.5.0）
@@ -226,7 +226,7 @@ curl -X POST -H "Authorization: Bearer $READONLY_TOKEN" \
 ```toml
 [audit]
 enabled = true
-path = "/var/log/eshield/audit.log"
+path = "/var/log/xuanarmor/audit.log"
 max_size_mb = 100
 ```
 
@@ -239,10 +239,10 @@ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8720/api/audit/verify | 
 
 ```json
 // 链完整
-{"ok": true, "checked": 1024, "first_bad_seq": null, "path": "/var/log/eshield/audit.log"}
+{"ok": true, "checked": 1024, "first_bad_seq": null, "path": "/var/log/xuanarmor/audit.log"}
 
 // 断链：从 seq=513 开始不一致
-{"ok": false, "checked": 900, "first_bad_seq": 513, "path": "/var/log/eshield/audit.log"}
+{"ok": false, "checked": 900, "first_bad_seq": 513, "path": "/var/log/xuanarmor/audit.log"}
 
 // 未开启文件审计后端
 {"ok": true, "enabled": false, "message": "文件审计后端未启用（[audit].enabled = false）"}
@@ -252,8 +252,8 @@ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8720/api/audit/verify | 
 
 ```bash
 # 每天凌晨校验一次并归档结果；ok=false 时告警
-0 3 * * * root curl -sf -H "Authorization: Bearer $(cat /etc/eshield/ro.token)" \
-  http://127.0.0.1:8720/api/audit/verify > /var/log/eshield/verify-$(date +\%F).json
+0 3 * * * root curl -sf -H "Authorization: Bearer $(cat /etc/xuanarmor/ro.token)" \
+  http://127.0.0.1:8720/api/audit/verify > /var/log/xuanarmor/verify-$(date +\%F).json
 ```
 
 - `ok=false` 的排查顺序：确认是否有人工编辑/截断文件、磁盘是否写满、是否发生过轮转或外部
@@ -288,17 +288,17 @@ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8720/api/map-usage | jq
 
 - 数据来自后台采样缓存（`metrics_interval_s`，默认 30s），不是实时遍历；
 - Array/RingBuf/LPM 表没有条目数采样，`entries` 固定为 0，水位无意义；
-- Prometheus 侧：`eshield_map_usage_ratio{name="..."}`、`eshield_map_entries{...}`、
-  `eshield_map_max_entries{...}`。
+- Prometheus 侧：`xuanarmor_map_usage_ratio{name="..."}`、`xuanarmor_map_entries{...}`、
+  `xuanarmor_map_max_entries{...}`。
 
 Prometheus 告警规则示例：
 
 ```yaml
 groups:
-  - name: eshield
+  - name: xuanarmor
     rules:
       - alert: XuanArmorMapUsageHigh
-        expr: eshield_map_usage_ratio > 0.8
+        expr: xuanarmor_map_usage_ratio > 0.8
         for: 10m
         labels:
           severity: warning
@@ -307,7 +307,7 @@ groups:
           description: "LRU 表接近容量，旧条目会被淘汰；检查误封量与阈值，必要时扩容。"
 
       - alert: XuanArmorMapUsageCritical
-        expr: eshield_map_usage_ratio > 0.95
+        expr: xuanarmor_map_usage_ratio > 0.95
         for: 5m
         labels:
           severity: critical
@@ -315,7 +315,7 @@ groups:
           summary: "XuanArmor map {{ $labels.name }} 即将打满（{{ $value | humanizePercentage }}）"
 
       - alert: XuanArmorFragmentBlocked
-        expr: rate(eshield_fragment_blocked_total[5m]) > 100
+        expr: rate(xuanarmor_fragment_blocked_total[5m]) > 100
         for: 10m
         labels:
           severity: warning
@@ -323,7 +323,7 @@ groups:
           summary: "分片策略持续命中（policy={{ $labels.policy }}），确认是否为分片攻击或业务 MTU 异常"
 
       - alert: XuanArmorPortRateBlocked
-        expr: rate(eshield_port_rate_blocked_total[5m]) > 100
+        expr: rate(xuanarmor_port_rate_blocked_total[5m]) > 100
         for: 10m
         labels:
           severity: warning
@@ -333,7 +333,7 @@ groups:
 
 补充：
 
-- `eshield_map_max_entries` 在启动时采集；`eshield_map_usage_ratio` 依赖 30s 采样，告警用
+- `xuanarmor_map_max_entries` 在启动时采集；`xuanarmor_map_usage_ratio` 依赖 30s 采样，告警用
   `for: 5m/10m` 避免抖动。
 - `/ready` 不是 Prometheus 指标，请用探针（blackbox exporter / 外部拨测）抓取
   `GET /ready`，非 200 立即告警。
@@ -353,16 +353,16 @@ refuse_memory_mb = 256   # 低于该值：拒绝启动
 
 - 低于 `refuse_memory_mb`：进程退出并输出
   `系统内存 xxxMB 低于 [limits].refuse_memory_mb=256MB，拒绝启动；如确需在低内存环境运行，
-  设置 ESHIELD_ALLOW_LOW_MEMORY=1 强制启动（建议同时下调 map 规模或关闭部分模块）`；
+  设置 XUANARMOR_ALLOW_LOW_MEMORY=1 强制启动（建议同时下调 map 规模或关闭部分模块）`；
 - 低于 `min_memory_mb`：打印告警后继续启动；
 - **不建议**使用强制启动开关：
 
 ```bash
 # 仅在明确知道后果（400MB 实例装 nginx + XuanArmor 后 sshd 会失联）时使用
-sudo ESHIELD_ALLOW_LOW_MEMORY=1 systemctl start eshield   # 不推荐
+sudo XUANARMOR_ALLOW_LOW_MEMORY=1 systemctl start xuanarmor   # 不推荐
 ```
 
-`eshield check` 只校验配置语法与取值，不执行内存预检；内存预检发生在 `eshield start` 时。
+`xuanarmor check` 只校验配置语法与取值，不执行内存预检；内存预检发生在 `xuanarmor start` 时。
 内存占用构成见 [capacity-planning.md](capacity-planning.md) 第 6 节。
 
 ## 日志
@@ -370,7 +370,7 @@ sudo ESHIELD_ALLOW_LOW_MEMORY=1 systemctl start eshield   # 不推荐
 默认输出到 journald：
 
 ```bash
-sudo journalctl -u eshield -f
+sudo journalctl -u xuanarmor -f
 ```
 
 可开启 JSON 结构化日志以便对接 ELK/Loki：
@@ -393,13 +393,13 @@ alert_cooldown_s = 60          # 两条告警之间的最小间隔
 
 ```bash
 # 备份配置、动态规则库与审计日志
-sudo tar czf eshield-backup.tar.gz /etc/eshield /var/lib/eshield /var/log/eshield
+sudo tar czf xuanarmor-backup.tar.gz /etc/xuanarmor /var/lib/xuanarmor /var/log/xuanarmor
 
 # 恢复
-sudo tar xzf eshield-backup.tar.gz -C /
+sudo tar xzf xuanarmor-backup.tar.gz -C /
 
 # 安装升级产生的备份（二进制/配置/systemd 单元）
-ls -1dt /var/lib/eshield/backup/*/
+ls -1dt /var/lib/xuanarmor/backup/*/
 ```
 
 ## 故障排查
@@ -407,13 +407,13 @@ ls -1dt /var/lib/eshield/backup/*/
 | 现象 | 排查 |
 |---|---|
 | `/ready` 返回 503 | XDP 未挂载（防护裸奔）：查日志 `XDP 自动重挂失败`、网卡是否存在、capability 是否齐全；必要时重启进程 |
-| 升级后版本没变 | `curl -s 127.0.0.1:8720/api/config \| jq -r .version`；确认安装的是哪个二进制（`which eshield`）、服务是否重启 |
-| 回滚失败/找不到备份 | 备份在 `/var/lib/eshield/backup/<时间戳>/`；确认 `--rollback <dir>` 指向存在 `eshield` 二进制的目录 |
+| 升级后版本没变 | `curl -s 127.0.0.1:8720/api/config \| jq -r .version`；确认安装的是哪个二进制（`which xuanarmor`）、服务是否重启 |
+| 回滚失败/找不到备份 | 备份在 `/var/lib/xuanarmor/backup/<时间戳>/`；确认 `--rollback <dir>` 指向存在 `xuanarmor` 二进制的目录 |
 | 卸载后配置还在 | 默认行为（`--uninstall` 保留配置与数据）；彻底删除需 `--purge` |
 | 写 API 返回 403 | 使用的是 `readonly_token`；写操作请用 `api_token` |
 | `/api/audit/verify` 返回 ok=false | 审计文件被改写/截断/轮转；对照 `first_bad_seq` 与备份；轮转后新文件单独校验属预期 |
 | map 使用率 > 0.8 | 见「可观测性：map 水位与告警」：调阈值、soft 模式、关闭 trust，必要时扩容 |
-| 启动被拒绝（内存） | 触发 `[limits].refuse_memory_mb`；加内存/关模块/降负载，不要随便用 `ESHIELD_ALLOW_LOW_MEMORY` |
+| 启动被拒绝（内存） | 触发 `[limits].refuse_memory_mb`；加内存/关模块/降负载，不要随便用 `XUANARMOR_ALLOW_LOW_MEMORY` |
 | XDP 挂载失败 | 检查内核版本、BTF、capability；virtio_net 上 `rx-gro-hw: [fixed]` 时只能 generic |
 | 流量未按预期 DROP | 检查白名单是否覆盖、规则优先级；用 `/api/audit` 与 `/api/stats` 确认命中来源 |
 | 日志无 eBPF 事件 | 确认 `ebpf_log_enabled = true` 且内核支持 perf event |
@@ -428,7 +428,7 @@ ls -1dt /var/lib/eshield/backup/*/
 
 ```bash
 # 节点侧
-eshield status --endpoint http://node:8720
+xuanarmor status --endpoint http://node:8720
 # 或
 curl -H "Authorization: Bearer <node_token>" http://node:8720/api/hub/status
 ```
@@ -448,7 +448,7 @@ curl -H "Authorization: Bearer <node_token>" \
 ### 备份 Hub 数据
 
 ```bash
-sudo tar czf eshield-hub-backup.tar.gz /var/lib/eshield-hub
+sudo tar czf xuanarmor-hub-backup.tar.gz /var/lib/xuanarmor-hub
 ```
 
 > Hub 是单实例有状态服务，不是高可用组件：请定期备份，并在变更/升级前先备份。

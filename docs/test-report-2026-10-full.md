@@ -14,7 +14,7 @@
 | atk2 | 47.76.102.207 / 172.23.83.42 | 8 vCPU / 14 GB / 20 GB | 7.0.0-31 / virtio_net |
 | atk3 | 47.76.34.233 / 172.23.83.41 | 8 vCPU / 14 GB / 20 GB | 7.0.0-31 / virtio_net |
 
-- 防御端：XuanArmor v0.4.7（`main` 9437c5f 本地构建），`ESHIELD_XDP_MODE=skb`（generic XDP），`web_bind=0.0.0.0:8720`，`api_token=eshield-test`。
+- 防御端：XuanArmor v0.4.7（`main` 9437c5f 本地构建），`XUANARMOR_XDP_MODE=skb`（generic XDP），`web_bind=0.0.0.0:8720`，`api_token=xuanarmor-test`。
 - 管理白名单：`8.149.100.136/32`（本地出口）+ `172.23.83.41/32`（atk3，保留恢复通道）；atk1/atk2 为被测攻击源。
 - 攻击工具：pktgen（内核模块，8 线程）、hping3、trafgen、scapy、wrk、iperf3、stress-ng、tcpdump。
 - 私网基线：RTT 0.1–0.2 ms；iperf3 单机 4 流 TCP 约 15.8 Gbps。
@@ -68,14 +68,14 @@
 
 ### 3.4 持久化与故障恢复（10/10 PASS）
 
-- 重启后黑名单、L7 指纹、防护项目全部从 `/var/lib/eshield/rules.redb` 恢复。
+- 重启后黑名单、L7 指纹、防护项目全部从 `/var/lib/xuanarmor/rules.redb` 恢复。
 - SIGHUP reload 可新增/移除静态黑名单。
 - `kill -9` 后进程消失、XDP 程序自动 detach；重新启动后 XDP 重新 attach，`/healthz` 正常。
 - CLI `status/block/unblock/reload/check` 均可用（`status` 输出为中文，脚本断言误报一次）。
 
 ### 3.5 Hub（5/5 PASS）
 
-- atk3 启动 `eshield-hub --bind 0.0.0.0:9930 --token hub-test`。
+- atk3 启动 `xuanarmor-hub --bind 0.0.0.0:9930 --token hub-test`。
 - 防御端配置 `[hub] enabled=true, urls=["http://172.23.83.41:9930"], node_name="defense-01"`。
 - `/api/hub/status` 显示 `connected=true`、`active_url` 指向 Hub；Hub `/api/v1/nodes` 返回 `defense-01 online`。
 - 本轮仅做连通性/注册冒烟，**策略下发、tombstone、冲突合并未在真实三节点上覆盖**（netns/单元测试覆盖了部分逻辑）。
@@ -120,13 +120,13 @@
 - `dmesg` 中 13 次：
   `netdevice: eth0: failed to disable GRO_HW!`
   `WARNING: net/core/dev.c:1857 at generic_xdp_install+0x119/0x180`
-- 触发条件：`ESHIELD_XDP_MODE=skb` 在 `virtio_net` 上 attach generic XDP；XDP 功能正常，但内核被 taint（`Tainted: [W]`）。
+- 触发条件：`XUANARMOR_XDP_MODE=skb` 在 `virtio_net` 上 attach generic XDP；XDP 功能正常，但内核被 taint（`Tainted: [W]`）。
 - 影响：功能无碍；生产使用 SKB 模式需要注意该内核告警。native XDP 本环境未测。
 
 ### 4.4 `reset-token` 后 `config/reload` 不恢复 `api_token`
 
 - `POST /api/auth/reset-token` 生成随机 token；随后 `POST /api/config/reload` 不会把 `api_token` 恢复为配置文件值（AuthState 只在启动时读取配置）。
-- 现象：重置后用原 `eshield-test` 调 API 返回 401；重启进程后恢复。
+- 现象：重置后用原 `xuanarmor-test` 调 API 返回 401；重启进程后恢复。
 - 影响：文档已说明部分配置需重启，但该行为容易误判为 reload 失败。
 
 ### 4.5 `/api/config` 的 `l7_scan.enabled` 与 `l7_scan_enabled` 不一致

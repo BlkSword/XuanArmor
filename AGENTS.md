@@ -6,11 +6,11 @@
 
 ## 1. 项目概述
 
-**XuanArmor**（版本 `0.5.1`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
+**XuanArmor**（版本 `0.6.0`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
 
 - **数据面**：用 Rust/Aya 编写的 eBPF 程序挂载在 Linux XDP 钩子上，在包进入内核网络协议栈之前完成过滤/丢弃/挑战。
 - **控制面**：Rust + Tokio + axum，提供 REST API、中文 Web Dashboard、CLI、TUI、审计日志、持久化与告警。
-- **目标产物**：单二进制静态链接（musl），只需要 `eshield` 一个可执行文件即可运行。
+- **目标产物**：单二进制静态链接（musl），只需要 `xuanarmor` 一个可执行文件即可运行。
 
 > **重要限制**：XuanArmor 是主机级清洗盾，不能突破物理带宽上限；T 级带宽耗尽型攻击需要上游云厂商清洗。SYN Cookie 代理仅支持 IPv4 TCP（降级式挑战：仅 SYN Flood 源进入 Cookie 挑战，正常连接直通）；L7 扫描仅检查 TCP 首包；防护项目按精确 IP 匹配（target_ips 不能为空且至少包含一个 IPv4 目标；CIDR 由控制面展开，下限 /24，IPv6 目标暂不匹配，DEFEND 动作复用全局防御模块并按 `enabled_modules` 位图过滤，未配置模块视为全开）。
 
@@ -28,10 +28,10 @@
   `CAP_BPF`、`CAP_NET_ADMIN`、`CAP_NET_RAW`、`CAP_PERFMON`、`CAP_IPC_LOCK`
 - **Rust**：
   - stable：用于用户态（`x86_64-unknown-linux-musl`）。
-  - nightly：用于 eBPF（`bpfel-unknown-none`，需要 `rust-src`）。默认使用经验证的 `nightly-2026-07-31`（最新 nightly 的 LLVM 可能与 bpf-linker/内核 verifier 不兼容），可用 `ESHIELD_EBPF_TOOLCHAIN` 覆盖。
-  - `ESHIELD_XDP_MODE=skb|generic`：强制 SKB 模式挂载，用于规避 veth/虚拟网卡上原生 XDP_TX 可能触发的内核问题。
-  - `ESHIELD_TEST_XDP_MODE=skb`：`tests/netns_test.sh` 专用，让所有测试实例继承 SKB 模式。
-  - `ESHIELD_ALLOW_LOW_MEMORY=1`：跳过 `[limits].refuse_memory_mb` 的启动内存预检（v0.5.0，不推荐）。
+  - nightly：用于 eBPF（`bpfel-unknown-none`，需要 `rust-src`）。默认使用经验证的 `nightly-2026-07-31`（最新 nightly 的 LLVM 可能与 bpf-linker/内核 verifier 不兼容），可用 `XUANARMOR_EBPF_TOOLCHAIN` 覆盖。
+  - `XUANARMOR_XDP_MODE=skb|generic`：强制 SKB 模式挂载，用于规避 veth/虚拟网卡上原生 XDP_TX 可能触发的内核问题。
+  - `XUANARMOR_TEST_XDP_MODE=skb`：`tests/netns_test.sh` 专用，让所有测试实例继承 SKB 模式。
+  - `XUANARMOR_ALLOW_LOW_MEMORY=1`：跳过 `[limits].refuse_memory_mb` 的启动内存预检（v0.5.0，不推荐）。
   - 内核 7.0 verifier 对复杂 XDP 程序更严格；PORT_ACL 上限 32、L7 模式上限 8 是为了低于 100 万指令处理上限。
 - **构建工具**：LLVM / clang、`bpf-linker`。
 - **注意**：Aya 用户态依赖 Linux API，**无法在 Windows 上直接编译或运行**；代码编辑可以在 Windows 完成，构建和测试必须在 WSL2 / 虚拟机 / 远程 Linux 上执行。
@@ -56,31 +56,31 @@
 
 ```text
 .
-├── eshield/            # 用户态控制面（主二进制）
-├── eshield-common/     # 内核态/用户态共享类型
-├── eshield-ebpf/       # eBPF/XDP 数据面
-├── eshield-hub/        # 分布式策略聚合 Hub
+├── xuanarmor/            # 用户态控制面（主二进制）
+├── xuanarmor-common/     # 内核态/用户态共享类型
+├── xuanarmor-ebpf/       # eBPF/XDP 数据面
+├── xuanarmor-hub/        # 分布式策略聚合 Hub
 └── xtask/              # 构建任务封装
 ```
 
-### 3.1 `eshield`（用户态控制面）
+### 3.1 `xuanarmor`（用户态控制面）
 
-主二进制入口：`eshield/src/main.rs`，提供 CLI 子命令和守护进程生命周期管理。
+主二进制入口：`xuanarmor/src/main.rs`，提供 CLI 子命令和守护进程生命周期管理。
 
 主要模块：
 
 - `main.rs`：CLI（`start` / `status` / `block` / `unblock` / `reload` / `check` / `tui` /
   `reset-token` / `upgrade` / `detach`）与守护进程启动流程；`--version` 打印版本。
-- `config.rs`：`/etc/eshield/config.toml` 的解析、默认值与校验。
+- `config.rs`：`/etc/xuanarmor/config.toml` 的解析、默认值与校验。
 - `control.rs`：封装所有 eBPF Map 操作、配置热加载、持久化规则恢复。
 - `state.rs`：内存中的统计状态（PPS/DPS、Top 攻击源、Trust Score 分布等）。
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
 - `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
-  v0.5.1 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
-- `xdp_link.rs`：XDP 挂载生命周期（v0.5.1）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
+  v0.6.0 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
+- `xdp_link.rs`：XDP 挂载生命周期（v0.6.0）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
   （`[xdp].persist_link`，默认 true），进程退出后旧程序继续过滤，新进程用 `bpf_link_update`
-  原子替换；`pin_path` 不可用时回退 `/run/eshield-bpf`。
-- `upgrade.rs`：`eshield upgrade`（v0.5.1）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
+  原子替换；`pin_path` 不可用时回退 `/run/xuanarmor-bpf`。
+- `upgrade.rs`：`xuanarmor upgrade`（v0.6.0）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
   `/ready` 健康检查 → 失败自动回滚；支持 `--rollback`、`--no-systemd --pid`、`--exec-prefix`。
 - `auth.rs`：Bearer Token 认证；本机 `127.0.0.1/::1` 自动跳过校验；v0.5.0 起支持 `readonly_token`
   只读角色（仅 GET/HEAD/OPTIONS，写操作 403）与 `GET /api/auth/check` 角色查询。
@@ -97,7 +97,7 @@
 - `tui.rs`：终端 Dashboard。
 - `health.rs`、`timeseries.rs`、`ip.rs`、`time.rs`、`login_limiter.rs`：辅助模块。
 
-Web 控制台前端是**独立的 Vue 3 + TypeScript 工程**，位于 `console/`（Vite 6 + `vite-plugin-singlefile` 构建为**单文件 HTML**），构建产物 `console/dist/index.html` 复制到 `eshield/web/app.html`，由 `web.rs` 通过 `include_str!("../web/app.html")` 嵌入二进制：
+Web 控制台前端是**独立的 Vue 3 + TypeScript 工程**，位于 `console/`（Vite 6 + `vite-plugin-singlefile` 构建为**单文件 HTML**），构建产物 `console/dist/index.html` 复制到 `xuanarmor/web/app.html`，由 `web.rs` 通过 `include_str!("../web/app.html")` 嵌入二进制：
 
 - `console/src/views/`：12 个页面（overview / attacks / packets / audit / modules / access / l7 / projects / geoip / rules / settings / login），单文件 hash 路由，无服务端 fallback。
 - `console/src/api/`：`client.ts` 统一 HTTP 封装（live / mock 自适应、字段归一化）、`mock.ts` 演示数据、`types.ts` DTO。
@@ -110,21 +110,21 @@ Web 控制台前端是**独立的 Vue 3 + TypeScript 工程**，位于 `console/
   `store.theme` 支持 system/light/dark，`?theme=dark|light` 可临时覆盖。
 - `console/design-preview/`：设计原型 `prototype.html` 与页面截图（非构建产物）。
 - `console/src/stores/`、`console/src/router/`：状态管理与路由导航分组。
-- 认证：登录后由后端下发 `eshield-token` HttpOnly Cookie；**前端不得把令牌写入 localStorage**（v0.4.8 起已移除该行为）。
+- 认证：登录后由后端下发 `xuanarmor-token` HttpOnly Cookie；**前端不得把令牌写入 localStorage**（v0.4.8 起已移除该行为）。
 - 改前端后必须重新构建并同步嵌入文件，否则 `app.html` 与源码漂移：
   ```bash
-  cd console && npm run build && cp dist/index.html ../eshield/web/app.html
+  cd console && npm run build && cp dist/index.html ../xuanarmor/web/app.html
   ```
   CI 的 `console-build` job 会构建并校验两者一致。
-- 旧版控制台资源 `eshield/web/{index.html,css/,js/}` 与 `eshield/src/{dashboard.html,echarts.min.js,login.html}` 均已删除（v0.4.7）；历史实现见 `git log --all -- eshield/web`。
+- 旧版控制台资源 `xuanarmor/web/{index.html,css/,js/}` 与 `xuanarmor/src/{dashboard.html,echarts.min.js,login.html}` 均已删除（v0.4.7）；历史实现见 `git log --all -- xuanarmor/web`。
 
-### 3.2 `eshield-ebpf`（内核态数据面）
+### 3.2 `xuanarmor-ebpf`（内核态数据面）
 
-`#![no_std]` eBPF 程序，入口 `src/main.rs`，XDP 程序名为 `eshield`。
+`#![no_std]` eBPF 程序，入口 `src/main.rs`，XDP 程序名为 `xuanarmor`。
 
 主要模块：
 
-- `main.rs`：`eshield` XDP 主流程：解析 → 白名单 → 端口 ACL → 黑名单 → 防护项目（DEFEND 记录 `project_flags` 位图）→ GeoIP（block/allow + default_action）→ 可选连接跟踪（仅启用时）→ TCP（SYN Proxy / SYN Flood）→ UDP Flood（per-IP + per-port）→ ICMP Flood → L7 扫描 → 速率限制 → 决策；非首片 IPv4 分片按 `[xdp].fragment_policy` 处理（默认 `rate_limit` 按「协议 + 0 端口」聚合限速，`drop` 直接丢弃，`pass` 跳过 L4 模块）。
+- `main.rs`：`xuanarmor` XDP 主流程：解析 → 白名单 → 端口 ACL → 黑名单 → 防护项目（DEFEND 记录 `project_flags` 位图）→ GeoIP（block/allow + default_action）→ 可选连接跟踪（仅启用时）→ TCP（SYN Proxy / SYN Flood）→ UDP Flood（per-IP + per-port）→ ICMP Flood → L7 扫描 → 速率限制 → 决策；非首片 IPv4 分片按 `[xdp].fragment_policy` 处理（默认 `rate_limit` 按「协议 + 0 端口」聚合限速，`drop` 直接丢弃，`pass` 跳过 L4 模块）。
 - `parser.rs`：有界读取 Ethernet / IPv4 / IPv6 / TCP / UDP / ICMP 头部。
 - `maps.rs`：BPF Maps 定义。
 - `blacklist.rs`：LRU Hash 黑名单查询。
@@ -136,16 +136,16 @@ Web 控制台前端是**独立的 Vue 3 + TypeScript 工程**，位于 `console/
 - `tcp_reset.rs`：丢弃 TCP 包时回复 RST。
 - `trust.rs`：IP 双向信誉评分。
 
-### 3.3 `eshield-common`（共享类型）
+### 3.3 `xuanarmor-common`（共享类型）
 
 - `lib.rs`：`#[repr(C)]` 的共享结构体，如 `IpKey`、`DropEvent`、`BlockEntry`、`GlobalStats`、规则 ID 常量等。
 - `pure.rs`：无副作作用工具函数。
 
 通过 `userspace` feature 启用 `aya` 与 `serde` 派生。
 
-### 3.4 `eshield-hub`（分布式策略聚合中心）
+### 3.4 `xuanarmor-hub`（分布式策略聚合中心）
 
-独立二进制 `eshield-hub`。
+独立二进制 `xuanarmor-hub`。
 
 主要模块：
 
@@ -180,7 +180,7 @@ zstd -d -f /tmp/bl.tar.zst -o /tmp/bl.tar && sudo tar -xf /tmp/bl.tar -C /usr/lo
 ```
 
 > verifier 只在 attach 时校验：**编译通过 != 能挂载**。改数据面后必须跑
-> `tests/netns_test.sh`，或用 `ESHIELD_XDP_MODE=skb` 在 dummy 网卡上实际挂载一次。
+> `tests/netns_test.sh`，或用 `XUANARMOR_XDP_MODE=skb` 在 dummy 网卡上实际挂载一次。
 
 ### 4.2 常用构建命令
 
@@ -197,15 +197,15 @@ cargo xtask run --iface eth0
 # 完整发布产物（二进制 + eBPF + 可选 DEB/RPM）
 bash scripts/build-release.sh
 
-# 一键从源码构建并安装到本机（/usr/local/bin、/etc/eshield、systemd）
+# 一键从源码构建并安装到本机（/usr/local/bin、/etc/xuanarmor、systemd）
 sudo bash scripts/install.sh --build
 ```
 
 构建产物：
 
-- 用户态：`target/x86_64-unknown-linux-musl/release/eshield`
-- eBPF：`target/bpfel-unknown-none/release/eshield`
-- 发布包：`dist/eshield-x86_64-unknown-linux-musl`、`dist/eshield.bpf.o`，以及可选的 `.deb` / `.rpm`。
+- 用户态：`target/x86_64-unknown-linux-musl/release/xuanarmor`
+- eBPF：`target/bpfel-unknown-none/release/xuanarmor`
+- 发布包：`dist/xuanarmor-x86_64-unknown-linux-musl`、`dist/xuanarmor.bpf.o`，以及可选的 `.deb` / `.rpm`。
 
 ---
 
@@ -218,10 +218,10 @@ sudo bash scripts/install.sh --build
 cargo fmt --check
 
 # Clippy（用户态）
-cargo clippy --workspace --exclude eshield-ebpf -- -D warnings
+cargo clippy --workspace --exclude xuanarmor-ebpf -- -D warnings
 
 # Clippy（eBPF，需要 nightly + bpf target；工具链与构建保持一致）
-cargo +nightly-2026-07-31 clippy --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core -- -D warnings
+cargo +nightly-2026-07-31 clippy --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core -- -D warnings
 
 # xtask 一键执行 fmt + clippy + test
 cargo xtask test
@@ -239,7 +239,7 @@ cargo xtask test
 ### 6.1 单元测试
 
 ```bash
-cargo test --workspace --exclude eshield-ebpf
+cargo test --workspace --exclude xuanarmor-ebpf
 ```
 
 > `tests/integration_tests.rs` 当前为占位；真实集成测试通过下方 shell 脚本在 netns 中运行。
@@ -269,8 +269,8 @@ sudo bash tests/hub_node_test.sh
 这些脚本会：
 
 1. 自动构建 eBPF 与用户态 release 二进制。
-2. 创建 `eshield-server` / `eshield-client` 两个 network namespace 与一对 veth。
-3. 启动 `eshield` 并验证黑名单、速率限制、SYN/UDP/ICMP Flood、L7 指纹、RST 回包、GeoIP、热加载、Hub 同步等场景。
+2. 创建 `xuanarmor-server` / `xuanarmor-client` 两个 network namespace 与一对 veth。
+3. 启动 `xuanarmor` 并验证黑名单、速率限制、SYN/UDP/ICMP Flood、L7 指纹、RST 回包、GeoIP、热加载、Hub 同步等场景。
 
 可设置 `SKIP_BUILD=1` 跳过构建：
 
@@ -281,7 +281,7 @@ sudo SKIP_BUILD=1 bash tests/netns_test.sh
 ### 6.3 基准测试
 
 ```bash
-cargo build --package eshield --target x86_64-unknown-linux-musl --release
+cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
 sudo bash scripts/benchmark.sh
 ```
 
@@ -293,7 +293,7 @@ sudo bash scripts/benchmark.sh
 
 ### 7.1 配置文件
 
-默认路径：`/etc/eshield/config.toml`。
+默认路径：`/etc/xuanarmor/config.toml`。
 完整示例：`packaging/config.example.toml`。
 
 关键配置段：
@@ -303,9 +303,9 @@ sudo bash scripts/benchmark.sh
 - `whitelist` / `blacklist`：启动时加载的静态 CIDR 白名单与永久黑名单。
 - `[xdp]`：XDP 挂载策略（`mode = auto|native|generic`、`disable_offloads`、`auto_reattach`）、
   `fragment_policy = pass|rate_limit|drop`（v0.5.0，默认 `rate_limit`，按「协议 + 0 端口」聚合限速）、
-  `persist_link = true`（v0.5.1，退出时保留 XDP 挂载）与 `pin_path = "/sys/fs/bpf"`（pinned link 所在 bpffs）。
+  `persist_link = true`（v0.6.0，退出时保留 XDP 挂载）与 `pin_path = "/sys/fs/bpf"`（pinned link 所在 bpffs）。
 - `[limits]`：启动内存预检（v0.5.0）——`min_memory_mb`（默认 512，告警）、
-  `refuse_memory_mb`（默认 256，拒绝启动），`ESHIELD_ALLOW_LOW_MEMORY=1` 可强制启动（不推荐）。
+  `refuse_memory_mb`（默认 256，拒绝启动），`XUANARMOR_ALLOW_LOW_MEMORY=1` 可强制启动（不推荐）。
 - `[rate_limit]`：per-IP 速率限制（默认 threshold=2000、封禁 120s；threshold 是"突发信用"，
   稳态 ≈ 每 tick 到达数/(1-decay)，默认约对应 2500pps 持续速率）；`block_mode = hard|soft`
   （v0.5.0，默认 hard；soft 只丢包不拉黑，适合 NAT 出口/共享代理）。
@@ -328,26 +328,26 @@ sudo bash scripts/benchmark.sh
 
 ```bash
 # 启动守护进程
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 
 # 查看状态（本机免 token）
-eshield status
+xuanarmor status
 
 # 实时封禁/解封 IP（0 秒表示永久）
-eshield block 192.0.2.1 --duration 300
-eshield unblock 192.0.2.1
+xuanarmor block 192.0.2.1 --duration 300
+xuanarmor unblock 192.0.2.1
 
 # 重新加载配置
-eshield reload
+xuanarmor reload
 
 # 校验配置
-eshield check --config /etc/eshield/config.toml
+xuanarmor check --config /etc/xuanarmor/config.toml
 
 # 启动 TUI
-eshield tui
+xuanarmor tui
 
 # 重置 Web 控制台 Token
-eshield reset-token
+xuanarmor reset-token
 ```
 
 ### 7.3 热加载
@@ -355,9 +355,9 @@ eshield reset-token
 修改配置后无需重启：
 
 ```bash
-sudo systemctl reload eshield
+sudo systemctl reload xuanarmor
 # 或
-sudo kill -HUP $(pidof eshield)
+sudo kill -HUP $(pidof xuanarmor)
 ```
 
 ### 7.4 Web Dashboard 与 API
@@ -377,25 +377,25 @@ GET/HEAD/OPTIONS，写操作返回 403；`GET /api/map-usage` 与 `GET /api/audi
 
 ### 8.1 systemd
 
-`packaging/eshield.service` 配置了最小权限运行：
+`packaging/xuanarmor.service` 配置了最小权限运行：
 
 ```bash
-sudo systemctl enable --now eshield
-sudo systemctl reload eshield   # SIGHUP 热加载
-sudo journalctl -u eshield -f
+sudo systemctl enable --now xuanarmor
+sudo systemctl reload xuanarmor   # SIGHUP 热加载
+sudo journalctl -u xuanarmor -f
 ```
 
-默认持久化路径：`/var/lib/eshield/rules.redb`；审计日志路径：`/var/log/eshield/audit.log`。
+默认持久化路径：`/var/lib/xuanarmor/rules.redb`；审计日志路径：`/var/log/xuanarmor/audit.log`。
 
 ### 8.2 容器
 
 ```bash
-docker run -d --name eshield \
+docker run -d --name xuanarmor \
   --cap-add BPF --cap-add NET_ADMIN --cap-add NET_RAW \
   --cap-add PERFMON --cap-add IPC_LOCK \
-  -v /etc/eshield/config.toml:/etc/eshield/config.toml:ro \
+  -v /etc/xuanarmor/config.toml:/etc/xuanarmor/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/eshield:v0.5.1
+  ghcr.io/blksword/xuanarmor:v0.6.0
 ```
 
 ### 8.3 分布式 Hub
@@ -403,7 +403,7 @@ docker run -d --name eshield \
 启动 Hub：
 
 ```bash
-eshield-hub --bind 0.0.0.0:9930 --token "your-hub-token"
+xuanarmor-hub --bind 0.0.0.0:9930 --token "your-hub-token"
 ```
 
 节点配置示例：
@@ -426,7 +426,7 @@ sync_rules_enabled = true
 ## 9. 安全注意事项
 
 - **必须 root 或高权限 capability**：加载 XDP/eBPF 程序需要 `CAP_BPF` / `CAP_NET_ADMIN` 等，无法以普通用户运行。
-- **Token 管理**：建议显式设置 `api_token`；若未设置，系统会生成随机 Token 并只在日志中输出前缀。首次使用可在本机执行 `eshield reset-token` 生成并打印新 Token，或在 CLI/TUI 上用 `--token`/`ESHIELD_API_TOKEN` 访问远程实例。Hub 支持 `--node-tokens-file`（每行 `node_name:token`），节点专属 Token 会以认证节点名为准，避免请求体伪造。
+- **Token 管理**：建议显式设置 `api_token`；若未设置，系统会生成随机 Token 并只在日志中输出前缀。首次使用可在本机执行 `xuanarmor reset-token` 生成并打印新 Token，或在 CLI/TUI 上用 `--token`/`XUANARMOR_API_TOKEN` 访问远程实例。Hub 支持 `--node-tokens-file`（每行 `node_name:token`），节点专属 Token 会以认证节点名为准，避免请求体伪造。
 - **只读 Token（v0.5.0）**：`readonly_token` 仅用于监控抓取/只读大屏（GET/HEAD/OPTIONS），
   写操作返回 403；不能用于控制台登录；修改两个 Token 都需要重启服务生效。
 - **审计与持久化**：动态规则写入 redb（`store_path`），审计日志可开启文件后端；确保这些目录的权限正确，避免敏感信息泄露。
@@ -459,7 +459,7 @@ sync_rules_enabled = true
   （命中计 `port_rate_blocked`，规则 ID `PORT_RATE=15`）。这是"限速兜底"，不是源 IP 识别。
 - **启动资源预检**：`[limits]`（v0.5.0）在加载 eBPF 前读取 `/proc/meminfo`：低于
   `refuse_memory_mb`（默认 256）拒绝启动，低于 `min_memory_mb`（默认 512）告警。
-  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
+  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `XUANARMOR_ALLOW_LOW_MEMORY=1` 长期绕过。
 - **防护项目**：按 目的 IPv4 + 端口 + 协议 精确匹配（target_ips 的 CIDR 由控制面展开，下限 /24，IPv6 目标暂不匹配）；PASS/DROP 在数据面生效，DEFEND 按 `enabled_modules` 位图过滤全局防御模块（SYN_FLOOD/UDP_FLOOD/ICMP_FLOOD/RATE_LIMIT/L7_SCAN/GEOIP 已实现，PORT_ACL/TCP_RESET/ADAPTIVE 位保留）。
 - **XDP 挂载**：由 `[xdp].mode` 控制（auto/native/generic，默认 auto）。native 失败时按
   `disable_offloads` 尝试关闭 virtio_net 的 rx-gro-hw/tx-checksum 后重试；仍失败则
@@ -467,9 +467,9 @@ sync_rules_enabled = true
   已知限制：virtio_net 在宿主机开启 GRO_HW/CSUM 时会拒绝 native XDP，`ethtool -k` 显示
   `rx-gro-hw: on [fixed]` 时 guest 侧无解，只能跑 generic（性能显著低于 native）。
   挂载状态由后台任务每 15s 校验：程序被摘掉时 `/ready` 返回 503 并自动重挂。
-  v0.5.1 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
-  彻底卸载用 `eshield detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
-  容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/eshield-bpf`）。
+  v0.6.0 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
+  彻底卸载用 `xuanarmor detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
+  容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/xuanarmor-bpf`）。
 - **eBPF 构建**：debug 构建因 `overflow-checks` 与未内联代码容易导致 verifier/bpf-linker 失败，因此工作空间默认 `opt-level = 3`；发布构建使用 `panic = abort`、`lto = true`、`strip = true`。
 
 ---

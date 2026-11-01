@@ -697,7 +697,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eshield"
+name = "xuanarmor"
 version = "0.4.7"
 dependencies = [
  "anyhow",
@@ -710,7 +710,7 @@ dependencies = [
  "crossterm",
  "csv",
  "dashmap",
- "eshield-common",
+ "xuanarmor-common",
  "futures",
  "libc",
  "rand 0.8.6",
@@ -730,7 +730,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "eshield-common"
+name = "xuanarmor-common"
 version = "0.4.7"
 dependencies = [
  "aya",
@@ -738,15 +738,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "eshield-ebpf"
+name = "xuanarmor-ebpf"
 version = "0.4.7"
 dependencies = [
  "aya-ebpf",
- "eshield-common",
+ "xuanarmor-common",
 ]
 
 [[package]]
-name = "eshield-hub"
+name = "xuanarmor-hub"
 version = "0.4.7"
 dependencies = [
  "anyhow",
@@ -755,7 +755,7 @@ dependencies = [
  "chrono",
  "clap",
  "dashmap",
- "eshield-common",
+ "xuanarmor-common",
  "redb",
  "reqwest",
  "rustls",

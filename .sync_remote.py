@@ -10,7 +10,7 @@ Modes:
 
 Recommended workflow (scheme 1):
   1. On Windows: python .sync_remote.py watch
-  2. Edit code locally; it auto-syncs to /tmp/eshield-sync on the test box.
+  2. Edit code locally; it auto-syncs to /tmp/xuanarmor-sync on the test box.
   3. On Linux: run cargo build / tests directly, no need to git push first.
   4. Git commit/push stays on Windows.
 """
@@ -24,15 +24,15 @@ import time
 import paramiko
 
 # 远程测试机地址，通过环境变量配置，避免把真实 IP/用户名提交到仓库。
-HOST = os.environ.get("ESHIELD_REMOTE_HOST", "127.0.0.1")
-USER = os.environ.get("ESHIELD_REMOTE_USER", "root")
-REMOTE_DIR = "/tmp/eshield-sync"
+HOST = os.environ.get("XUANARMOR_REMOTE_HOST", "127.0.0.1")
+USER = os.environ.get("XUANARMOR_REMOTE_USER", "root")
+REMOTE_DIR = "/tmp/xuanarmor-sync"
 LOCAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_password() -> str:
     """Load remote password from env, .remote_pass file, or prompt."""
-    pwd = os.environ.get("ESHIELD_REMOTE_PASS")
+    pwd = os.environ.get("XUANARMOR_REMOTE_PASS")
     if pwd:
         return pwd
     pass_file = os.path.join(LOCAL_DIR, ".remote_pass")
@@ -50,8 +50,8 @@ def load_private_key() -> paramiko.PKey | None:
     ssh_dir = os.path.expanduser("~/.ssh")
     for name in ("id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"):
         key_paths.append(os.path.join(ssh_dir, name))
-    if os.environ.get("ESHIELD_REMOTE_KEY"):
-        key_paths.insert(0, os.path.expanduser(os.environ["ESHIELD_REMOTE_KEY"]))
+    if os.environ.get("XUANARMOR_REMOTE_KEY"):
+        key_paths.insert(0, os.path.expanduser(os.environ["XUANARMOR_REMOTE_KEY"]))
 
     for path in key_paths:
         if not os.path.exists(path):
@@ -247,9 +247,9 @@ def env_setup() -> str:
 def run_build(ssh, remote_dir: str) -> int:
     env = env_setup()
     cmds = [
-        f"cd {remote_dir} && {env} && cargo +nightly build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q",
-        f"cd {remote_dir} && {env} && cargo build --package eshield --target x86_64-unknown-linux-musl --release -q",
-        f"cd {remote_dir} && {env} && cargo build --package eshield-hub --release -q",
+        f"cd {remote_dir} && {env} && cargo +nightly build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release -q",
+        f"cd {remote_dir} && {env} && cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release -q",
+        f"cd {remote_dir} && {env} && cargo build --package xuanarmor-hub --release -q",
     ]
     for cmd in cmds:
         code = run_command(ssh, cmd)

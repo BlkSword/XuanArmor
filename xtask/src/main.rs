@@ -59,19 +59,19 @@ fn build_ebpf(profile: &str) -> anyhow::Result<()> {
         other => anyhow::bail!("invalid profile: {}", other),
     };
 
-    let target = format!("target/bpfel-unknown-none/{}/eshield", out_dir);
+    let target = format!("target/bpfel-unknown-none/{}/xuanarmor", out_dir);
 
     println!("Building eBPF program ({})...", profile);
 
     // 最新 nightly 的 LLVM 版本可能与 bpf-linker/内核 verifier 不兼容；
-    // 默认使用已验证的 nightly-2026-07-31，可用 ESHIELD_EBPF_TOOLCHAIN 覆盖。
-    let toolchain = std::env::var("ESHIELD_EBPF_TOOLCHAIN")
+    // 默认使用已验证的 nightly-2026-07-31，可用 XUANARMOR_EBPF_TOOLCHAIN 覆盖。
+    let toolchain = std::env::var("XUANARMOR_EBPF_TOOLCHAIN")
         .unwrap_or_else(|_| "nightly-2026-07-31".to_string());
     let mut cmd = Command::new("cargo");
     cmd.arg(format!("+{}", toolchain)).args([
         "build",
         "--package",
-        "eshield-ebpf",
+        "xuanarmor-ebpf",
         "--target",
         "bpfel-unknown-none",
         "-Z",
@@ -96,7 +96,7 @@ fn build_userspace(profile: &str) -> anyhow::Result<()> {
     cmd.args([
         "build",
         "--package",
-        "eshield",
+        "xuanarmor",
         "--target",
         "x86_64-unknown-linux-musl",
     ]);
@@ -108,16 +108,16 @@ fn build_userspace(profile: &str) -> anyhow::Result<()> {
     anyhow::ensure!(status.success(), "userspace build failed");
 
     println!(
-        "userspace artifact: target/x86_64-unknown-linux-musl/{}/eshield",
+        "userspace artifact: target/x86_64-unknown-linux-musl/{}/xuanarmor",
         profile
     );
     Ok(())
 }
 
 fn run(iface: &str) -> anyhow::Result<()> {
-    let mut cmd = Command::new("target/x86_64-unknown-linux-musl/release/eshield");
-    cmd.args(["start", "--config", "/etc/eshield/config.toml"]);
-    cmd.env("ESHIELD_INTERFACE", iface);
+    let mut cmd = Command::new("target/x86_64-unknown-linux-musl/release/xuanarmor");
+    cmd.args(["start", "--config", "/etc/xuanarmor/config.toml"]);
+    cmd.env("XUANARMOR_INTERFACE", iface);
     cmd.spawn()?.wait()?;
     Ok(())
 }
@@ -137,7 +137,7 @@ fn run_tests() -> anyhow::Result<()> {
             "clippy",
             "--workspace",
             "--exclude",
-            "eshield-ebpf",
+            "xuanarmor-ebpf",
             "--",
             "-D",
             "warnings",
@@ -147,7 +147,7 @@ fn run_tests() -> anyhow::Result<()> {
 
     println!("Running cargo test (userspace + hub)...");
     let status = Command::new("cargo")
-        .args(["test", "--workspace", "--exclude", "eshield-ebpf"])
+        .args(["test", "--workspace", "--exclude", "xuanarmor-ebpf"])
         .status()?;
     anyhow::ensure!(status.success(), "tests failed");
 

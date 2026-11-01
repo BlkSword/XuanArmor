@@ -2,9 +2,9 @@
 # 平滑升级回归（v0.5.1）：
 #   1) persist_link=true：进程退出后 XDP 仍挂载（数据面不中断，fail-closed）
 #   2) 新进程启动时检测到旧程序并原子替换（replaced_existing）
-#   3) `eshield upgrade`（--no-systemd 模式）完成替换、健康检查通过
+#   3) `xuanarmor upgrade`（--no-systemd 模式）完成替换、健康检查通过
 #   4) 无效二进制升级失败且不影响正在运行的服务（自动中止/回滚）
-#   5) `eshield detach` 能真正摘除 XDP
+#   5) `xuanarmor detach` 能真正摘除 XDP
 #
 # 用法：sudo SKIP_BUILD=1 bash tests/upgrade_test.sh
 set -u
@@ -23,16 +23,16 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.." || exit 1
 
 if [ -z "${SKIP_BUILD:-}" ]; then
-    "$CARGO" +"${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package eshield-ebpf \
+    "$CARGO" +"${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package xuanarmor-ebpf \
         --target bpfel-unknown-none -Z build-std=core --release -q || exit 1
-    "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q || exit 1
+    "$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q || exit 1
 fi
 
 NS_S=up-server; NS_C=up-client
 PORT=18771; API="http://127.0.0.1:${PORT}"
-WORK="/tmp/eshield-upgrade-test.$$"
-BIN="$WORK/eshield"
-NEWBIN="$WORK/eshield.new"
+WORK="/tmp/xuanarmor-upgrade-test.$$"
+BIN="$WORK/xuanarmor"
+NEWBIN="$WORK/xuanarmor.new"
 CFG="$WORK/config.toml"
 FAILS=0
 check() { if [ "$2" = "1" ]; then echo "[PASS] $3"; else echo "[FAIL] $3"; FAILS=$((FAILS+1)); fi; }
@@ -55,17 +55,17 @@ mkdir -p "$WORK"
 # `ip netns exec` 内的 mount 属于该进程的私有 mount namespace，进程退出即消失。
 # 真实部署里 /sys/fs/bpf 已由 systemd 挂好；测试/容器环境按需准备。
 mount_bpffs() {
-    mkdir -p /run/eshield-bpf
-    if ! mountpoint -q /run/eshield-bpf; then
-        mount -t bpf bpf /run/eshield-bpf 2>/dev/null || true
+    mkdir -p /run/xuanarmor-bpf
+    if ! mountpoint -q /run/xuanarmor-bpf; then
+        mount -t bpf bpf /run/xuanarmor-bpf 2>/dev/null || true
     fi
-    mountpoint -q /run/eshield-bpf || echo "[WARN] /run/eshield-bpf 不是 bpffs，pinned link 测试可能退化"
+    mountpoint -q /run/xuanarmor-bpf || echo "[WARN] /run/xuanarmor-bpf 不是 bpffs，pinned link 测试可能退化"
 }
 mount_bpffs
 # 清理上一次运行可能残留的实例（它们会占着 redb 锁）
-pkill -9 -f "^/tmp/eshield-upgrade-test" 2>/dev/null || true
+pkill -9 -f "^/tmp/xuanarmor-upgrade-test" 2>/dev/null || true
 # 清理上次运行遗留的 pinned link（网卡已重建时它对应的 link 已失效）
-rm -f /run/eshield-bpf/eshield_xdp_link /sys/fs/bpf/eshield_xdp_link 2>/dev/null || true
+rm -f /run/xuanarmor-bpf/xuanarmor_xdp_link /sys/fs/bpf/xuanarmor_xdp_link 2>/dev/null || true
 
 ip netns del "$NS_C" 2>/dev/null; ip netns del "$NS_S" 2>/dev/null
 ip netns add "$NS_S"; ip netns add "$NS_C"
@@ -88,7 +88,7 @@ blacklist = []
 mode = "generic"
 persist_link = true
 TOML
-cp target/x86_64-unknown-linux-musl/release/eshield "$BIN" && chmod +x "$BIN"
+cp target/x86_64-unknown-linux-musl/release/xuanarmor "$BIN" && chmod +x "$BIN"
 cp "$BIN" "$NEWBIN"
 
 xdp_attached() { ip netns exec "$NS_S" ip -d link show veth-up 2>/dev/null | grep -q "xdp" && echo 1 || echo 0; }
@@ -140,7 +140,7 @@ check "4a" "$([ "$UP_RC" = "0" ] && echo 1 || echo 0)" "upgrade 返回 0（rc=$U
 check "4b" "$([ "$(ready)" = "200" ] && echo 1 || echo 0)" "升级后 /ready=200"
 check "4c" "$(xdp_attached)" "升级后 XDP 仍挂载"
 check "4d" "$([ -n "$NEW_PID" ] && echo 1 || echo 0)" "新进程已运行（PID=$NEW_PID）"
-check "4e" "$([ -f "$WORK/backup"/*/eshield ] && echo 1 || echo 0)" "已生成二进制备份"
+check "4e" "$([ -f "$WORK/backup"/*/xuanarmor ] && echo 1 || echo 0)" "已生成二进制备份"
 if [ "$UP_RC" != "0" ]; then echo "--- upgrade log ---"; tail -20 "$WORK/upgrade.log"; fi
 
 echo "=== 5) 无效二进制升级：必须失败且不影响现有服务 ==="
@@ -156,7 +156,7 @@ check "5a" "$([ "$BAD_RC" != "0" ] && echo 1 || echo 0)" "无效二进制升级�
 check "5b" "$([ "$BEFORE_PID" = "$AFTER_PID" ] && echo 1 || echo 0)" "原进程未被替换"
 check "5c" "$([ "$(ready)" = "200" ] && echo 1 || echo 0)" "服务仍可用"
 
-echo "=== 6) eshield detach 摘除 XDP ==="
+echo "=== 6) xuanarmor detach 摘除 XDP ==="
 kill -TERM "$AFTER_PID" 2>/dev/null
 sleep 0.5
 ip netns exec "$NS_S" "$BIN" detach --config "$CFG" >/dev/null 2>&1

@@ -10,7 +10,7 @@
 
 ```bash
 # 先构建 release 二进制
-cargo build --package eshield --target x86_64-unknown-linux-musl --release
+cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
 
 # 运行基准测试
 sudo bash scripts/benchmark.sh

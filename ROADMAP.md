@@ -31,7 +31,7 @@
 - [x] 按规则维度与源 IP 的 Prometheus 指标
 - [x] 中文 TUI 仪表盘
 - [x] SIGHUP / `systemctl reload` 热加载
-- [x] 配置校验与 dry-run：`eshield check --config`
+- [x] 配置校验与 dry-run：`xuanarmor check --config`
 - [x] eBPF 内核调试日志（`AYA_LOGS`）与运行时开关
 - [x] 本地 fmt/clippy 与远程 Linux 集成测试全部通过
 
@@ -70,7 +70,7 @@
 
 **目标**：实现多节点策略共享，一个节点发现威胁，所有节点共享免疫记忆。
 
-- [x] `eshield-hub` 独立二进制（axum + redb）
+- [x] `xuanarmor-hub` 独立二进制（axum + redb）
 - [x] 节点 → Hub 策略上报（黑名单、Trust Score）
 - [x] Hub → 节点策略分发（peer 策略、Hub 威胁情报）
 - [x] tombstone 删除同步
@@ -110,7 +110,7 @@
 - [x] 优化字体、字号、行距与视觉层级
 - [x] 统一卡片、表格、按钮、表单样式
 - [x] 增加页面切换动画与微交互
-- [x] 控制台全面重写：`eshield/web/` 模块化实现（原生 ES modules + design tokens，暗色 SOC 视觉，9 个页面，无前端构建链仍嵌单二进制）；旧版单文件控制台保留在 `/legacy` 一个版本周期
+- [x] 控制台全面重写：`xuanarmor/web/` 模块化实现（原生 ES modules + design tokens，暗色 SOC 视觉，9 个页面，无前端构建链仍嵌单二进制）；旧版单文件控制台保留在 `/legacy` 一个版本周期
 
 ### 2. 控制台体验增强
 

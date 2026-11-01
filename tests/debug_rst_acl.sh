@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_NS="eshield-server"
-CLIENT_NS="eshield-client"
+SERVER_NS="xuanarmor-server"
+CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 
 cleanup() {
     set +e
-    [ -n "${ESHIELD_PID:-}" ] && kill $ESHIELD_PID 2>/dev/null || true
+    [ -n "${XUANARMOR_PID:-}" ] && kill $XUANARMOR_PID 2>/dev/null || true
     [ -n "${HTTP_PID:-}" ] && kill $HTTP_PID 2>/dev/null || true
     ip netns del "$CLIENT_NS" 2>/dev/null || true
     ip netns del "$SERVER_NS" 2>/dev/null || true
@@ -25,7 +25,7 @@ ip netns exec "$SERVER_NS" ip link set veth-server up
 ip netns exec "$CLIENT_NS" ip link set veth-client up
 ip netns exec "$SERVER_NS" ip link set lo up
 
-ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/eshield-http-server.log 2>&1 &
+ip netns exec "$SERVER_NS" python3 - <<'PY' >/tmp/xuanarmor-http-server.log 2>&1 &
 import socketserver, http.server
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -36,9 +36,9 @@ PY
 HTTP_PID=$!
 sleep 1
 
-CFG=/tmp/eshield-rst-acl.toml
-LOG=/tmp/eshield-rst-acl.log
-REDB=/tmp/eshield-rst-acl.redb
+CFG=/tmp/xuanarmor-rst-acl.toml
+LOG=/tmp/xuanarmor-rst-acl.log
+REDB=/tmp/xuanarmor-rst-acl.redb
 rm -f "$CFG" "$LOG" "$REDB"
 cat > "$CFG" <<EOF
 interface = "veth-server"
@@ -63,8 +63,8 @@ dport = "80"
 action = "drop"
 EOF
 
-ip netns exec "$SERVER_NS" /tmp/eshield-sync/target/x86_64-unknown-linux-musl/release/eshield start --config "$CFG" >"$LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$SERVER_NS" /tmp/xuanarmor-sync/target/x86_64-unknown-linux-musl/release/xuanarmor start --config "$CFG" >"$LOG" 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 echo "--- curl / with port ACL drop + RST ---"

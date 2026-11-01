@@ -1,0 +1,229 @@
+mod api;
+mod auth;
+mod feed;
+mod limiter;
+mod models;
+mod registry;
+mod state;
+mod store;
+mod tls;
+
+pub(crate) mod time {
+    pub(crate) fn now_ns() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64
+    }
+}
+
+use crate::{
+    auth::HubAuth, limiter::RateLimiter, registry::NodeRegistry, state::AppState, store::Store,
+};
+use anyhow::{bail, Context, Result};
+use clap::Parser;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tracing_subscriber::EnvFilter;
+
+#[derive(Parser)]
+#[command(name = "xuanarmor-hub")]
+#[command(about = "XuanArmor distributed policy hub")]
+struct Args {
+    #[arg(long, default_value = "0.0.0.0:9930")]
+    bind: String,
+
+    #[arg(long)]
+    token: Option<String>,
+
+    /// 可选：每节点 token 文件，每行 `node_name:token`，与 master token 并存
+    #[arg(long)]
+    node_tokens_file: Option<PathBuf>,
+
+    #[arg(long, default_value = "/var/lib/xuanarmor-hub/policies.redb")]
+    store_path: PathBuf,
+
+    #[arg(long)]
+    tls_cert: Option<PathBuf>,
+
+    #[arg(long)]
+    tls_key: Option<PathBuf>,
+
+    #[arg(long)]
+    tls_client_ca: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 120)]
+    node_timeout_s: u64,
+
+    /// 威胁情报 feed URL（Hub 统一拉取后分发给各节点）。
+    #[arg(long)]
+    threat_feed_url: Option<String>,
+
+    #[arg(long, default_value_t = 3600)]
+    threat_feed_interval_s: u64,
+
+    #[arg(long, default_value = "drop")]
+    threat_feed_action: String,
+
+    #[arg(long, default_value_t = 86400)]
+    threat_feed_ttl_s: u64,
+}
+
+/// 解析每节点 token 文件：每行 `node_name:token`，支持 # 注释与空行。
+fn load_node_tokens(path: &std::path::Path) -> Result<HashMap<String, String>> {
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("read node tokens file {}", path.display()))?;
+    let mut tokens = HashMap::new();
+    for (idx, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (name, token) = line.split_once(':').with_context(|| {
+            format!("{}:{}: expected `node_name:token`", path.display(), idx + 1)
+        })?;
+        let name = name.trim();
+        let token = token.trim();
+        if name.is_empty() || token.is_empty() {
+            bail!(
+                "{}:{}: node_name and token cannot be empty",
+                path.display(),
+                idx + 1
+            );
+        }
+        tokens.insert(name.to_string(), token.to_string());
+    }
+    Ok(tokens)
+}
+
+/// bind 地址是否仅环回（环回上单 token 风险可接受）。
+fn bind_is_loopback(bind: &str) -> bool {
+    // 支持 "[::1]:8720"、"127.0.0.1:8720"、"localhost:8720" 以及无端口的裸 IPv6 "::1"
+    let host = if let Some(rest) = bind.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else if bind.matches(':').count() > 1 {
+        bind
+    } else {
+        bind.rsplit_once(':').map(|(h, _)| h).unwrap_or(bind)
+    };
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
+
+    let args = Args::parse();
+
+    let token = args
+        .token
+        .or_else(|| std::env::var("XUANARMOR_HUB_TOKEN").ok())
+        .unwrap_or_default();
+    if token.is_empty() {
+        bail!("--token or XUANARMOR_HUB_TOKEN is required");
+    }
+    let node_tokens = match &args.node_tokens_file {
+        Some(path) => load_node_tokens(path)?,
+        None => HashMap::new(),
+    };
+
+    // 多节点安全红线：只有 master token 时，任何持有它的客户端都能以任意
+    // node_name 推送/删除策略（Hub 无法区分节点，策略可被伪造）。
+    if node_tokens.is_empty() && !bind_is_loopback(&args.bind) {
+        tracing::warn!(
+            "Hub 未配置 --node-tokens-file，仅使用 master token 认证：\
+             多节点环境下任何持有该 token 的客户端都能冒充任意 node_name 推送策略。\
+             生产环境请为每个节点配置独立 token（每行 node_name:token）。"
+        );
+    }
+
+    if let Some(parent) = args.store_path.parent() {
+        std::fs::create_dir_all(parent).context("create store directory")?;
+    }
+
+    let store = Arc::new(Store::new(&args.store_path).context("open policy store")?);
+    let registry = NodeRegistry::new();
+    let rate_limiter = RateLimiter::default();
+
+    let registry = Arc::new(registry);
+    registry
+        .clone()
+        .cleanup_task(args.node_timeout_s * 1_000_000_000);
+
+    // 周期清理过期策略与 tombstone，避免策略库长期运行后只增不减。
+    {
+        let prune_store = Arc::clone(&store);
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tick.tick().await;
+                let now = crate::time::now_ns();
+                // tombstone 保留 7 天，确保节点有充足时间同步解封。
+                let tombstone_ttl_ns = 7 * 24 * 3600 * 1_000_000_000u64;
+                match prune_store.prune(now, tombstone_ttl_ns) {
+                    Ok((policies, tombstones)) if policies + tombstones > 0 => {
+                        tracing::info!(
+                            policies,
+                            tombstones,
+                            "pruned expired hub policies/tombstones"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("failed to prune hub store: {e}"),
+                }
+            }
+        });
+    }
+
+    if let Some(feed_url) = args.threat_feed_url.clone() {
+        feed::spawn_feed_sync(
+            feed::FeedConfig {
+                name: "hub-threat-feed".to_string(),
+                url: feed_url,
+                interval_s: args.threat_feed_interval_s,
+                action: args.threat_feed_action,
+                ttl_s: args.threat_feed_ttl_s,
+            },
+            Arc::clone(&store),
+        );
+    }
+
+    let state = Arc::new(AppState {
+        store,
+        registry: Arc::clone(&registry),
+        auth: HubAuth::new(token, node_tokens),
+        rate_limiter,
+        node_timeout_ns: args.node_timeout_s * 1_000_000_000,
+    });
+
+    let addr: SocketAddr = args.bind.parse().context("parse bind address")?;
+    let app = api::router(state).into_make_service_with_connect_info::<SocketAddr>();
+
+    match (args.tls_cert, args.tls_key) {
+        (Some(cert), Some(key)) => {
+            let tls_config = tls::load_rustls_config(&cert, &key, args.tls_client_ca.as_deref())
+                .context("load TLS config")?;
+            tracing::info!(%addr, "starting HTTPS hub");
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(app)
+                .await
+                .context("serve HTTPS")?;
+        }
+        (None, None) => {
+            tracing::warn!(%addr, "starting HTTP hub without TLS");
+            axum_server::bind(addr)
+                .serve(app)
+                .await
+                .context("serve HTTP")?;
+        }
+        _ => {
+            bail!("--tls-cert and --tls-key must be provided together");
+        }
+    }
+
+    Ok(())
+}

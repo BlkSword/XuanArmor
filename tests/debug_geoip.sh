@@ -3,7 +3,7 @@
 set -e
 
 CARGO="${CARGO:-/home/ubuntu/.cargo/bin/cargo}"
-EBPF_TOOLCHAIN="${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
+EBPF_TOOLCHAIN="${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}"
 export PATH="/home/ubuntu/.cargo/bin:$PATH"
 export RUSTUP_HOME="${RUSTUP_HOME:-/home/ubuntu/.rustup}"
 export CARGO_HOME="${CARGO_HOME:-/home/ubuntu/.cargo}"
@@ -11,28 +11,28 @@ export CARGO_HOME="${CARGO_HOME:-/home/ubuntu/.cargo}"
 cd "$(dirname "$0")/.."
 
 echo "=== Building ==="
-"$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
-"$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
+"$CARGO" +"$EBPF_TOOLCHAIN" build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
+"$CARGO" build --package xuanarmor --target x86_64-unknown-linux-musl --release -q
 
 echo "=== Setting up netns ==="
-ip netns del eshield-client 2>/dev/null || true
-ip netns del eshield-server 2>/dev/null || true
+ip netns del xuanarmor-client 2>/dev/null || true
+ip netns del xuanarmor-server 2>/dev/null || true
 ip link del veth-server 2>/dev/null || true
 ip link del veth-client 2>/dev/null || true
 
-ip netns add eshield-server
-ip netns add eshield-client
+ip netns add xuanarmor-server
+ip netns add xuanarmor-client
 ip link add veth-server type veth peer name veth-client
-ip link set veth-server netns eshield-server
-ip link set veth-client netns eshield-client
-ip -n eshield-server addr add 10.0.0.1/24 dev veth-server
-ip -n eshield-client addr add 10.0.0.2/24 dev veth-client
-ip -n eshield-server link set veth-server up
-ip -n eshield-client link set veth-client up
-ip -n eshield-server link set lo up
-ip -n eshield-client link set lo up
+ip link set veth-server netns xuanarmor-server
+ip link set veth-client netns xuanarmor-client
+ip -n xuanarmor-server addr add 10.0.0.1/24 dev veth-server
+ip -n xuanarmor-client addr add 10.0.0.2/24 dev veth-client
+ip -n xuanarmor-server link set veth-server up
+ip -n xuanarmor-client link set veth-client up
+ip -n xuanarmor-server link set lo up
+ip -n xuanarmor-client link set lo up
 
-TMPDIR=$(mktemp -d /tmp/eshield-geoip-XXXXXX)
+TMPDIR=$(mktemp -d /tmp/xuanarmor-geoip-XXXXXX)
 chmod 755 "$TMPDIR"
 
 cat > "$TMPDIR/geoip_country.csv" <<'EOF'
@@ -40,7 +40,7 @@ network,country_iso
 10.0.0.0/24,XX
 EOF
 
-cat > "$TMPDIR/eshield-geoip.toml" <<'TOML'
+cat > "$TMPDIR/xuanarmor-geoip.toml" <<'TOML'
 interface = "veth-server"
 log_level = "info"
 ebpf_log_enabled = true
@@ -61,20 +61,20 @@ enabled = true
 country_blocks_csv = "GEOIP_CSV_PATH"
 block_countries = ["XX"]
 TOML
-sed -i "s|GEOIP_CSV_PATH|$TMPDIR/geoip_country.csv|g" "$TMPDIR/eshield-geoip.toml"
+sed -i "s|GEOIP_CSV_PATH|$TMPDIR/geoip_country.csv|g" "$TMPDIR/xuanarmor-geoip.toml"
 
-cp target/x86_64-unknown-linux-musl/release/eshield /tmp/eshield
-cp target/bpfel-unknown-none/release/eshield /tmp/eshield.ebpf
+cp target/x86_64-unknown-linux-musl/release/xuanarmor /tmp/xuanarmor
+cp target/bpfel-unknown-none/release/xuanarmor /tmp/xuanarmor.ebpf
 
 echo "=== Mounting debugfs ==="
 mount -t debugfs none /sys/kernel/debug 2>/dev/null || true
 > /sys/kernel/debug/tracing/trace_pipe || true
 
 echo "=== Starting XuanArmor ==="
-ESHIELD_LOG="$TMPDIR/eshield.log"
+XUANARMOR_LOG="$TMPDIR/xuanarmor.log"
 export RUST_LOG=debug
-ip netns exec eshield-server /tmp/eshield start --config "$TMPDIR/eshield-geoip.toml" >"$ESHIELD_LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec xuanarmor-server /tmp/xuanarmor start --config "$TMPDIR/xuanarmor-geoip.toml" >"$XUANARMOR_LOG" 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 echo "=== GEOIP_BLOCKED_V4 map ==="
@@ -86,18 +86,18 @@ echo "=== CONFIG runtime ==="
 bpftool map dump name CONFIG 2>/dev/null || true
 
 echo "=== Pinging from client (should be dropped) ==="
-ip netns exec eshield-client ping -c 1 -W 2 10.0.0.1 || true
+ip netns exec xuanarmor-client ping -c 1 -W 2 10.0.0.1 || true
 
 sleep 1
 echo "=== XuanArmor log (last 80 lines) ==="
-tail -n 80 "$ESHIELD_LOG" 2>/dev/null || true
+tail -n 80 "$XUANARMOR_LOG" 2>/dev/null || true
 
 echo "=== trace_pipe ==="
 timeout 2 cat /sys/kernel/debug/tracing/trace_pipe || true
 
 echo "=== Cleanup ==="
-kill $ESHIELD_PID 2>/dev/null || true
-wait $ESHIELD_PID 2>/dev/null || true
-ip netns del eshield-client 2>/dev/null || true
-ip netns del eshield-server 2>/dev/null || true
+kill $XUANARMOR_PID 2>/dev/null || true
+wait $XUANARMOR_PID 2>/dev/null || true
+ip netns del xuanarmor-client 2>/dev/null || true
+ip netns del xuanarmor-server 2>/dev/null || true
 rm -rf "$TMPDIR"

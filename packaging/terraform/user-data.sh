@@ -2,13 +2,13 @@
 set -euo pipefail
 
 VERSION="0.1.2"
-DOWNLOAD_URL="https://github.com/eshield/eshield/releases/download/v${VERSION}/eshield-x86_64-unknown-linux-musl"
+DOWNLOAD_URL="https://github.com/xuanarmor/xuanarmor/releases/download/v${VERSION}/xuanarmor-x86_64-unknown-linux-musl"
 
-curl -sSL "$DOWNLOAD_URL" -o /usr/local/bin/eshield
-chmod +x /usr/local/bin/eshield
+curl -sSL "$DOWNLOAD_URL" -o /usr/local/bin/xuanarmor
+chmod +x /usr/local/bin/xuanarmor
 
-mkdir -p /etc/eshield /var/lib/eshield /var/log/eshield
-cat >/etc/eshield/config.toml <<'EOF'
+mkdir -p /etc/xuanarmor /var/lib/xuanarmor /var/log/xuanarmor
+cat >/etc/xuanarmor/config.toml <<'EOF'
 interface = "eth0"
 log_level = "info"
 ebpf_log_enabled = false
@@ -38,14 +38,14 @@ window_s = 5
 block_duration_s = 300
 EOF
 
-cat >/lib/systemd/system/eshield.service <<'EOF'
+cat >/lib/systemd/system/xuanarmor.service <<'EOF'
 [Unit]
 Description=XuanArmor
 After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/eshield start --config /etc/eshield/config.toml
+ExecStart=/usr/local/bin/xuanarmor start --config /etc/xuanarmor/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK
@@ -56,5 +56,5 @@ WantedBy=multi-user.target
 EOF
 
 systemctl daemon-reload
-systemctl enable eshield
-systemctl start eshield
+systemctl enable xuanarmor
+systemctl start xuanarmor

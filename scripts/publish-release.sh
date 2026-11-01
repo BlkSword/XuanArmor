@@ -9,17 +9,17 @@ set -euo pipefail
 # 前置条件：
 #   1. 本地已打 tag 并推送到 origin：git push origin <TAG>
 #   2. 已设置 GH_TOKEN（Classic token，需要 repo 权限）
-#   3. 默认产物为 target/x86_64-unknown-linux-musl/release/eshield 和
-#      target/bpfel-unknown-none/release/eshield；也可通过 ASSET_DIR 环境变量指定目录
+#   3. 默认产物为 target/x86_64-unknown-linux-musl/release/xuanarmor 和
+#      target/bpfel-unknown-none/release/xuanarmor；也可通过 ASSET_DIR 环境变量指定目录
 
 REPO="BlkSword/XuanArmor"
-VERSION=$(grep -m1 '^version' eshield/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
+VERSION=$(grep -m1 '^version' xuanarmor/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
 TAG="v${VERSION}"
 # 与 v0.4.6/v0.4.7 的 release 资产格式保持一致（由 scripts/build-release.sh 产出）
 DEFAULT_ASSETS=(
-    "dist/eshield-x86_64-unknown-linux-musl"
-    "dist/eshield.bpf.o"
-    "dist/eshield-hub-x86_64-unknown-linux-gnu"
+    "dist/xuanarmor-x86_64-unknown-linux-musl"
+    "dist/xuanarmor.bpf.o"
+    "dist/xuanarmor-hub-x86_64-unknown-linux-gnu"
     "dist/SHA256SUMS"
 )
 ASSET_DIR="${ASSET_DIR:-}"

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVER_NS="eshield-server"
-CLIENT_NS="eshield-client"
+SERVER_NS="xuanarmor-server"
+CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 
 cleanup() {
     set +e
-    [ -n "${ESHIELD_PID:-}" ] && kill $ESHIELD_PID 2>/dev/null || true
+    [ -n "${XUANARMOR_PID:-}" ] && kill $XUANARMOR_PID 2>/dev/null || true
     [ -n "${HTTP_PID:-}" ] && kill $HTTP_PID 2>/dev/null || true
     ip netns del "$CLIENT_NS" 2>/dev/null || true
     ip netns del "$SERVER_NS" 2>/dev/null || true
@@ -26,7 +26,7 @@ ip netns exec "$CLIENT_NS" ip link set veth-client up
 ip netns exec "$SERVER_NS" ip link set lo up
 ip netns exec "$CLIENT_NS" ip link set lo up
 
-cat > /tmp/eshield-http-server.py <<'PY'
+cat > /tmp/xuanarmor-http-server.py <<'PY'
 import socketserver, http.server
 class Handler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -34,13 +34,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 with socketserver.ThreadingTCPServer(("10.0.0.1", 80), Handler) as httpd:
     httpd.serve_forever()
 PY
-ip netns exec "$SERVER_NS" python3 /tmp/eshield-http-server.py >/tmp/eshield-http-server.log 2>&1 &
+ip netns exec "$SERVER_NS" python3 /tmp/xuanarmor-http-server.py >/tmp/xuanarmor-http-server.log 2>&1 &
 HTTP_PID=$!
 sleep 1
 
-CFG=/tmp/eshield-gs.toml
-LOG=/tmp/eshield-gs.log
-REDB=/tmp/eshield-gs.redb
+CFG=/tmp/xuanarmor-gs.toml
+LOG=/tmp/xuanarmor-gs.log
+REDB=/tmp/xuanarmor-gs.redb
 rm -f "$CFG" "$LOG" "$REDB"
 cat > "$CFG" <<EOF
 interface = "veth-server"
@@ -62,8 +62,8 @@ enabled = false
 
 EOF
 
-ip netns exec "$SERVER_NS" /tmp/eshield-sync/target/x86_64-unknown-linux-musl/release/eshield start --config "$CFG" >"$LOG" 2>&1 &
-ESHIELD_PID=$!
+ip netns exec "$SERVER_NS" /tmp/xuanarmor-sync/target/x86_64-unknown-linux-musl/release/xuanarmor start --config "$CFG" >"$LOG" 2>&1 &
+XUANARMOR_PID=$!
 sleep 3
 
 ip netns exec "$CLIENT_NS" curl -sS --connect-timeout 1 --max-time 1 "http://${SERVER_IP}/" -o /dev/null || true

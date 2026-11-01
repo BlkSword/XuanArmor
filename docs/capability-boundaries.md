@@ -87,7 +87,7 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
   永远到不了阈值，而且会挤占 LRU 表。
 - **缓解**：v0.5.0 起 `[port_rate_limit]` **默认开启**：按「协议 + 目的端口」聚合限速，
   不依赖源地址；对非首片 IPv4 分片也按「协议 + 0 端口」聚合（`[xdp].fragment_policy` 默认 `rate_limit`）。
-  可通过 `eshield_port_rate_blocked_total` 与 `port_rate_blocked` 观察命中。
+  可通过 `xuanarmor_port_rate_blocked_total` 与 `port_rate_blocked` 观察命中。
 - **现状**：v0.5.0 已实现端口聚合限速兜底；「目的 IP + 端口」维度当前未实现（需要更多 map 容量）。
 
 ### B5. IPv4 非首片分片曾可绕过 L4 防护（v0.5.0 修复，可配置）
@@ -150,7 +150,7 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
 - **原因**：eBPF map 预分配（约 75–82MB，见容量文档）+ 用户态进程 RSS（实测 ~48MB）+ 业务进程，
   在 ≤512MB 的机器上很容易触发 OOM；XDP 挂载后内核内存压力还会影响调度。
 - **缓解**：v0.5.0 新增 `[limits]`：`refuse_memory_mb`（默认 256MB）以下拒绝启动，
-  `min_memory_mb`（默认 512MB）以下打印告警；**不建议**用 `ESHIELD_ALLOW_LOW_MEMORY=1` 绕过，
+  `min_memory_mb`（默认 512MB）以下打印告警；**不建议**用 `XUANARMOR_ALLOW_LOW_MEMORY=1` 绕过，
   若必须绕过，请同时减少 map 规模/关闭模块并保证有 swap 或内存余量。
 - **现状**：v0.5.0 已实现启动内存预检；map 容量写死在 eBPF 侧，不支持按配置缩小。
 
@@ -158,9 +158,9 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
 
 - **现象**：Hub 单实例宕机期间，节点无法拉取/上报策略，`/api/hub/status` 显示未连接；
   Hub 的 redb 数据损坏或磁盘丢失会丢失聚合策略。
-- **原因**：`eshield-hub` 是单进程 + 单机 redb 的有状态服务，没有多副本选主、没有共识复制；
+- **原因**：`xuanarmor-hub` 是单进程 + 单机 redb 的有状态服务，没有多副本选主、没有共识复制；
   节点只做本地缓存与重试，不做一致性保证。
-- **缓解**：Hub 放在有备份的机器上，定期备份 `/var/lib/eshield-hub`；
+- **缓解**：Hub 放在有备份的机器上，定期备份 `/var/lib/xuanarmor-hub`；
   节点侧保持本地策略自治（Hub 不可用时防护不中断）；多节点场景不要依赖 Hub 做实时决策。
 - **现状**：单实例有状态服务，不支持多副本高可用；多节点场景可在 Hub 前做冷备/手工切换。
 
@@ -189,16 +189,16 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
 - **缓解**：大流量场景在 DNS/Anycast/负载均衡层做流量调度，XuanArmor 负责每台主机自己的兜底。
 - **现状**：不做跨机流量调度。
 
-### B15. 服务停止后 XDP 程序仍驻留（`persist_link`，v0.5.1）
+### B15. 服务停止后 XDP 程序仍驻留（`persist_link`，v0.6.0）
 
-- **现象**：执行 `systemctl stop eshield` 后 `ip -d link show <iface>` 仍能看到 XDP 程序，
+- **现象**：执行 `systemctl stop xuanarmor` 后 `ip -d link show <iface>` 仍能看到 XDP 程序，
   流量继续被过滤。
-- **原因**：v0.5.1 起 `[xdp].persist_link = true`（默认）：为避免升级/重启期间防护中断，
+- **原因**：v0.6.0 起 `[xdp].persist_link = true`（默认）：为避免升级/重启期间防护中断，
   进程退出时不摘除 XDP 挂载，旧程序继续按最后下发的策略过滤（fail-closed）。
-- **缓解**：需要彻底卸载时执行 `eshield detach --config /etc/eshield/config.toml`
+- **缓解**：需要彻底卸载时执行 `xuanarmor detach --config /etc/xuanarmor/config.toml`
   （删除 pinned link 并 `ip link set dev <iface> xdp off`）；或把 `persist_link` 设为 `false`，
   恢复「退出即卸载」的行为。
-- **现状**：默认保留挂载；`eshield detach` 可摘除。
+- **现状**：默认保留挂载；`xuanarmor detach` 可摘除。
 
 ## 4. 明确不承诺（面向验收与售前）
 

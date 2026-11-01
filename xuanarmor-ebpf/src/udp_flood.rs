@@ -1,0 +1,39 @@
+use aya_ebpf::programs::XdpContext;
+
+use crate::blacklist::add_to_blacklist;
+use crate::maps::CONFIG;
+use crate::rate_counter::{update_rate_counter, RateUpdate};
+use xuanarmor_common::{rules, IpKey};
+
+/// 检测并处理 UDP Flood：对单 IP 的 UDP 包做速率限制，超限即 DROP 并加黑名单。
+/// 独立栈帧（BPF 512 字节组合栈限制）。
+#[inline(never)]
+pub fn handle_udp_flood(_ctx: &XdpContext, src: &IpKey, now_ns: u64) -> bool {
+    let runtime = match CONFIG.get(0) {
+        Some(c) => c,
+        None => return false,
+    };
+
+    if runtime.udp_flood_enabled == 0 {
+        return false;
+    }
+
+    let mut update = RateUpdate {
+        counter: 0,
+        threshold: 0,
+        block_duration_s: 0,
+    };
+    if !update_rate_counter(src, now_ns, &mut update) {
+        return false;
+    }
+
+    if update.counter > update.threshold {
+        // soft 模式只丢弃超限包，不拉黑（避免 NAT 出口被整段封禁）
+        if runtime.rate_limit_soft == 0 {
+            add_to_blacklist(src, now_ns, update.block_duration_s, rules::UDP_FLOOD as u8);
+        }
+        return true;
+    }
+
+    false
+}

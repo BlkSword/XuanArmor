@@ -1,6 +1,6 @@
 # XuanArmor
 
-> Formerly eShield; the project was renamed to **XuanArmor** in v0.5.1. The executable, systemd unit, config path (`/etc/eshield`) and `ESHIELD_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
+> Formerly eShield; the project was renamed to **XuanArmor** in v0.6.0. The executable, systemd unit, config path (`/etc/xuanarmor`) and `XUANARMOR_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
 
 [中文](README.md) | English
 
@@ -30,8 +30,8 @@ Charts are hand-written SVG components (no ECharts); the console bundle is ~239K
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
 ```
 
-- Installs the **latest release**, auto-detects the active NIC and writes `/etc/eshield/config.toml`.
-- Open `http://<server-ip>:8720` for the console (run `sudo eshield reset-token` for the first login token).
+- Installs the **latest release**, auto-detects the active NIC and writes `/etc/xuanarmor/config.toml`.
+- Open `http://<server-ip>:8720` for the console (run `sudo xuanarmor reset-token` for the first login token).
 - Verify: `curl -s http://127.0.0.1:8720/ready` returning `200` means the daemon is ready and XDP is attached.
 
 Variants:
@@ -68,9 +68,9 @@ Requirements: Linux kernel >= 5.10 with BTF, root privileges; >= 512MB RAM recom
 
 ## 1. Overview
 
-> **v0.5.1 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
+> **v0.6.0 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
 > filtering while the process restarts; the new process replaces it atomically, with no data-plane gap.
-> Adds `eshield upgrade` (backup, health check, automatic rollback), `eshield detach`, SO_REUSEPORT web listener
+> Adds `xuanarmor upgrade` (backup, health check, automatic rollback), `xuanarmor detach`, SO_REUSEPORT web listener
 > and graceful shutdown.
 > **v0.5.0 (2026-10-31)**: productization and capability completion. Fixes spoofed-source and IPv4 fragment bypasses
 > (per-destination-port rate limiting is now on by default, plus a new `[xdp].fragment_policy`),
@@ -86,10 +86,10 @@ Components:
 
 | Component | Description |
 |---|---|
-| `eshield-ebpf` | XDP/eBPF data plane for per-packet parsing, rule matching, dropping, TCP RST, and SYN cookie responses. |
-| `eshield` | Userspace control plane for configuration, API, web console, TUI, persistence, audit, alerting, and Hub synchronization. |
-| `eshield-common` | Shared structs, constants, and pure functions used by both data and control planes. |
-| `eshield-hub` | Distributed policy aggregation service for node registration, policy sharing, and per-node tokens. |
+| `xuanarmor-ebpf` | XDP/eBPF data plane for per-packet parsing, rule matching, dropping, TCP RST, and SYN cookie responses. |
+| `xuanarmor` | Userspace control plane for configuration, API, web console, TUI, persistence, audit, alerting, and Hub synchronization. |
+| `xuanarmor-common` | Shared structs, constants, and pure functions used by both data and control planes. |
+| `xuanarmor-hub` | Distributed policy aggregation service for node registration, policy sharing, and per-node tokens. |
 | `xtask` | Build task wrapper that pins the eBPF toolchain and target. |
 
 ## 2. Capabilities
@@ -123,7 +123,7 @@ Components:
 | Capability | Description |
 |---|---|
 | Web console | Vue 3 + TypeScript single-file SPA (`console/`), follows system light/dark theme, command palette, high-density tables. |
-| CLI and TUI | `eshield start/status/block/unblock/reload/check/tui/reset-token`. |
+| CLI and TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token`. |
 | Configuration reload | Reload through `SIGHUP` or `systemctl reload` without restarting XDP. |
 | Authentication and RBAC-lite | Optional Bearer token; v0.5.0 adds a read-only token (GET/HEAD only); loopback requests bypass token validation. |
 | Persistence | Dynamic rules and time-series metrics are stored in redb and restored after restart. |
@@ -132,7 +132,7 @@ Components:
 | Install lifecycle | `scripts/install.sh` supports `--version`, `--sha256`, `--rollback`, and `--uninstall`; upgrades back up the current install first. |
 | Alerting | Webhook alerts with threshold and cooldown configuration. |
 | Distributed policy | Hub aggregates policies across nodes; supports master token and per-node tokens. |
-| Kernel compatibility | Pinned `nightly-2026-07-31` and `bpf-linker 0.10.4`; `ESHIELD_XDP_MODE=skb` for virtual NICs. |
+| Kernel compatibility | Pinned `nightly-2026-07-31` and `bpf-linker 0.10.4`; `XUANARMOR_XDP_MODE=skb` for virtual NICs. |
 
 ## 3. Architecture
 
@@ -184,11 +184,11 @@ The build toolchain can be overridden with environment variables:
 
 | Variable | Purpose |
 |---|---|
-| `ESHIELD_EBPF_TOOLCHAIN` | Override the nightly toolchain used for eBPF builds. |
-| `ESHIELD_XDP_MODE` | Set to `skb` or `generic` to force SKB generic attach mode. |
-| `ESHIELD_INTERFACE` | Override the interface from the configuration file. |
-| `ESHIELD_ALLOW_LOW_MEMORY` | Set to `1` to skip the `[limits].refuse_memory_mb` startup check (not recommended). |
-| `ESHIELD_ASSUME_TLS_PROXY` | Set to `1` when TLS is terminated by a reverse proxy, silencing the plaintext-HTTP warning. |
+| `XUANARMOR_EBPF_TOOLCHAIN` | Override the nightly toolchain used for eBPF builds. |
+| `XUANARMOR_XDP_MODE` | Set to `skb` or `generic` to force SKB generic attach mode. |
+| `XUANARMOR_INTERFACE` | Override the interface from the configuration file. |
+| `XUANARMOR_ALLOW_LOW_MEMORY` | Set to `1` to skip the `[limits].refuse_memory_mb` startup check (not recommended). |
+| `XUANARMOR_ASSUME_TLS_PROXY` | Set to `1` when TLS is terminated by a reverse proxy, silencing the plaintext-HTTP warning. |
 
 Windows hosts cannot build or run the project directly. Build and test on WSL2, a Linux virtual machine, or a Linux cloud host.
 
@@ -204,8 +204,8 @@ The installer performs the following steps:
 
 1. Build the eBPF program with the pinned nightly toolchain.
 2. Build the userspace binary with the musl target.
-3. Install `eshield` to `/usr/local/bin`.
-4. Create `/etc/eshield/config.toml` (an existing config is never overwritten on upgrade).
+3. Install `xuanarmor` to `/usr/local/bin`.
+4. Create `/etc/xuanarmor/config.toml` (an existing config is never overwritten on upgrade).
 5. Install and enable the systemd service.
 
 Upgrade, rollback, and uninstall (v0.5.0):
@@ -217,7 +217,7 @@ sudo bash scripts/install.sh --version 0.5.0 --sha256 <official-sha256>
 
 # Roll back to the latest backup (or a specific backup directory)
 sudo bash scripts/install.sh --rollback
-sudo bash scripts/install.sh --rollback /var/lib/eshield/backup/20261030-090000
+sudo bash scripts/install.sh --rollback /var/lib/xuanarmor/backup/20261030-090000
 
 # Uninstall (config and data are kept by default; --purge removes them)
 sudo bash scripts/install.sh --uninstall
@@ -229,19 +229,19 @@ See [docs/operations.md](docs/operations.md) for the full procedure.
 ### 5.2 Manual Build
 
 ```bash
-export ESHIELD_EBPF_TOOLCHAIN=nightly-2026-07-31
+export XUANARMOR_EBPF_TOOLCHAIN=nightly-2026-07-31
 
 cargo xtask build-ebpf
-cargo build --package eshield --target x86_64-unknown-linux-musl --release
-cargo build --package eshield-hub --release
+cargo build --package xuanarmor --target x86_64-unknown-linux-musl --release
+cargo build --package xuanarmor-hub --release
 ```
 
 Artifacts:
 
 ```text
-target/x86_64-unknown-linux-musl/release/eshield
-target/release/eshield-hub
-target/bpfel-unknown-none/release/eshield
+target/x86_64-unknown-linux-musl/release/xuanarmor
+target/release/xuanarmor-hub
+target/bpfel-unknown-none/release/xuanarmor
 ```
 
 The eBPF object is embedded into the userspace binary through `include_bytes_aligned!`, so deployment only requires the userspace executable.
@@ -295,19 +295,19 @@ A complete example is available in [packaging/config.example.toml](packaging/con
 ### 6.2 Start
 
 ```bash
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 ```
 
-The console listens on `http://<host>:8720/` by default. When `api_token` is not set, the system generates a random token and prints its prefix in the log. Use `eshield reset-token` to rotate it.
+The console listens on `http://<host>:8720/` by default. When `api_token` is not set, the system generates a random token and prints its prefix in the log. Use `xuanarmor reset-token` to rotate it.
 
 ### 6.3 systemd
 
 ```bash
-sudo systemctl start eshield
-sudo systemctl status eshield
-sudo systemctl stop eshield
-sudo systemctl reload eshield
-sudo journalctl -u eshield -f
+sudo systemctl start xuanarmor
+sudo systemctl status xuanarmor
+sudo systemctl stop xuanarmor
+sudo systemctl reload xuanarmor
+sudo journalctl -u xuanarmor -f
 ```
 
 `reload` sends `SIGHUP` and reloads the configuration without detaching XDP.
@@ -317,14 +317,14 @@ sudo journalctl -u eshield -f
 Native XDP_TX on veth and similar virtual NICs can trigger kernel issues. Use SKB mode in test environments:
 
 ```bash
-ESHIELD_XDP_MODE=skb sudo eshield start --config /etc/eshield/config.toml
+XUANARMOR_XDP_MODE=skb sudo xuanarmor start --config /etc/xuanarmor/config.toml
 ```
 
-Integration test scripts use `ESHIELD_TEST_XDP_MODE=skb` to run all instances in SKB mode.
+Integration test scripts use `XUANARMOR_TEST_XDP_MODE=skb` to run all instances in SKB mode.
 
 ## 7. Configuration
 
-The default configuration path is `/etc/eshield/config.toml`.
+The default configuration path is `/etc/xuanarmor/config.toml`.
 
 | Section / field | Purpose |
 |---|---|
@@ -366,32 +366,32 @@ Constraints:
 
 ```bash
 # Start the daemon
-sudo eshield start --config /etc/eshield/config.toml
+sudo xuanarmor start --config /etc/xuanarmor/config.toml
 
 # Local status
-eshield status
+xuanarmor status
 
 # Block an IP; duration 0 means permanent
-eshield block 192.0.2.1 --duration 300
+xuanarmor block 192.0.2.1 --duration 300
 
 # Unblock an IP
-eshield unblock 192.0.2.1
+xuanarmor unblock 192.0.2.1
 
 # Reload configuration
-eshield reload
+xuanarmor reload
 
 # Validate configuration
-eshield check --config /etc/eshield/config.toml
+xuanarmor check --config /etc/xuanarmor/config.toml
 
 # Start TUI
-eshield tui
+xuanarmor tui
 
 # Remote API
-eshield status --endpoint http://eshield-host:8720
-eshield block 192.0.2.1 --endpoint http://eshield-host:8720
+xuanarmor status --endpoint http://xuanarmor-host:8720
+xuanarmor block 192.0.2.1 --endpoint http://xuanarmor-host:8720
 
 # Rotate console token
-eshield reset-token
+xuanarmor reset-token
 ```
 
 ### 8.2 Authentication and Roles
@@ -407,18 +407,18 @@ eshield reset-token
 ### 8.3 Reload
 
 ```bash
-sudo systemctl reload eshield
-sudo kill -HUP $(pidof eshield)
+sudo systemctl reload xuanarmor
+sudo kill -HUP $(pidof xuanarmor)
 ```
 
 ## 9. Distributed Hub
 
-`eshield-hub` aggregates and distributes policies across nodes.
+`xuanarmor-hub` aggregates and distributes policies across nodes.
 
 ### 9.1 Start the Hub
 
 ```bash
-eshield-hub --bind 0.0.0.0:9930 --token "master-token"
+xuanarmor-hub --bind 0.0.0.0:9930 --token "master-token"
 ```
 
 A TLS termination layer such as nginx or Caddy should be deployed in front of the Hub in production.
@@ -426,9 +426,9 @@ A TLS termination layer such as nginx or Caddy should be deployed in front of th
 ### 9.2 Per-Node Tokens
 
 ```bash
-eshield-hub --bind 0.0.0.0:9930 \
+xuanarmor-hub --bind 0.0.0.0:9930 \
   --token "master-token" \
-  --node-tokens-file /etc/eshield-hub/node-tokens
+  --node-tokens-file /etc/xuanarmor-hub/node-tokens
 ```
 
 Each line in `node-tokens` uses the format `node_name:token`. Comment lines starting with `#` and empty lines are ignored. After a node token is authenticated, the Hub uses the authenticated node name for policy attribution and rate limiting, preventing `node_name` spoofing through request bodies. The master token remains compatible.
@@ -481,9 +481,9 @@ Console shortcuts:
 http://<host>:8720/metrics
 ```
 
-Primary metrics include `eshield_dropped_total`, `eshield_passed_total`, `eshield_blacklist_blocked_total`, `eshield_rate_limited_total`, `eshield_syn_flood_blocked_total`, `eshield_udp_flood_blocked_total`, `eshield_icmp_flood_blocked_total`, `eshield_geoip_blocked_total`, `eshield_conn_track_blocked_total`, `eshield_dropped_by_protocol_total`, `eshield_dropped_by_port_total`, and `eshield_source_dropped_total`.
+Primary metrics include `xuanarmor_dropped_total`, `xuanarmor_passed_total`, `xuanarmor_blacklist_blocked_total`, `xuanarmor_rate_limited_total`, `xuanarmor_syn_flood_blocked_total`, `xuanarmor_udp_flood_blocked_total`, `xuanarmor_icmp_flood_blocked_total`, `xuanarmor_geoip_blocked_total`, `xuanarmor_conn_track_blocked_total`, `xuanarmor_dropped_by_protocol_total`, `xuanarmor_dropped_by_port_total`, and `xuanarmor_source_dropped_total`.
 
-**New in v0.5.0**: `eshield_map_usage_ratio{name}`, `eshield_map_entries{name}`, `eshield_map_max_entries{name}`, `eshield_fragment_blocked_total{policy}`, and `eshield_port_rate_blocked_total`. The JSON view of map usage is `GET /api/map-usage`; alerting rule examples are in [docs/operations.md](docs/operations.md).
+**New in v0.5.0**: `xuanarmor_map_usage_ratio{name}`, `xuanarmor_map_entries{name}`, `xuanarmor_map_max_entries{name}`, `xuanarmor_fragment_blocked_total{policy}`, and `xuanarmor_port_rate_blocked_total`. The JSON view of map usage is `GET /api/map-usage`; alerting rule examples are in [docs/operations.md](docs/operations.md).
 
 ### 10.3 JSON API
 
@@ -504,13 +504,13 @@ The full API reference is available in [docs/api.md](docs/api.md).
 
 ```bash
 curl -s -H "Authorization: Bearer <token>" http://<host>:8720/api/audit/verify
-# {"ok":true,"checked":1024,"first_bad_seq":null,"path":"/var/log/eshield/audit.log"}
+# {"ok":true,"checked":1024,"first_bad_seq":null,"path":"/var/log/xuanarmor/audit.log"}
 ```
 
 ### 10.5 TUI
 
 ```bash
-eshield tui
+xuanarmor tui
 ```
 
 ## 11. Performance
@@ -573,7 +573,7 @@ add control-plane and application overhead). A 2 vCPU host should only carry ≤
 ### 12.1 Unit Tests
 
 ```bash
-cargo test --workspace --exclude eshield-ebpf
+cargo test --workspace --exclude xuanarmor-ebpf
 ```
 
 ### 12.2 Integration Tests
@@ -581,9 +581,9 @@ cargo test --workspace --exclude eshield-ebpf
 Integration tests require root privileges and run inside network namespaces. SKB mode is recommended for virtual NICs.
 
 ```bash
-sudo ESHIELD_TEST_XDP_MODE=skb bash tests/netns_test.sh
-sudo ESHIELD_XDP_MODE=skb bash tests/hub_node_test.sh
-sudo ESHIELD_XDP_MODE=skb bash tests/full_attack_test.sh
+sudo XUANARMOR_TEST_XDP_MODE=skb bash tests/netns_test.sh
+sudo XUANARMOR_XDP_MODE=skb bash tests/hub_node_test.sh
+sudo XUANARMOR_XDP_MODE=skb bash tests/full_attack_test.sh
 ```
 
 Covered scenarios include blocklist, TCP RST response, rate limiting, SYN flood, SYN cookie challenge and recovery, UDP flood, ICMP flood, L7 fingerprints, SIGHUP reload, adaptive thresholds, GeoIP/ASN, threat intelligence, protection project DROP, GeoIP allowlist, IPv4 fragments, connection tracking half-open blocking, and Hub policy synchronization with per-node tokens.
@@ -592,8 +592,8 @@ Covered scenarios include blocklist, TCP RST response, rate limiting, SYN flood,
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --exclude eshield-ebpf -- -D warnings
-cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
+cargo clippy --workspace --exclude xuanarmor-ebpf -- -D warnings
+cargo +nightly-2026-07-31 clippy --package xuanarmor-ebpf \
   --target bpfel-unknown-none -Z build-std=core -- -D warnings
 ```
 
@@ -601,10 +601,10 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 
 ```text
 .
-├── eshield/            # Userspace control plane, web console, CLI, TUI
-├── eshield-ebpf/       # eBPF/XDP data plane
-├── eshield-common/     # Shared structs, constants, and pure functions
-├── eshield-hub/        # Distributed policy Hub
+├── xuanarmor/            # Userspace control plane, web console, CLI, TUI
+├── xuanarmor-ebpf/       # eBPF/XDP data plane
+├── xuanarmor-common/     # Shared structs, constants, and pure functions
+├── xuanarmor-hub/        # Distributed policy Hub
 ├── xtask/              # eBPF build tasks
 ├── scripts/            # Install, uninstall, benchmark, and release scripts
 ├── tests/              # Unit and integration test scripts
@@ -628,11 +628,11 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 - **SYN cookie scope**: IPv4 TCP only, challenge mode, and only sources that exceed the configured threshold. Challenge packets only support 20/24-byte TCP headers; sources that send timestamps/SACK options are dropped while challenged (up to 30s). **This module is experimental and disabled by default**; it is not recommended for high-traffic services with real clients.
 - **Protection project scope**: the data plane matches exact IPv4 addresses only. CIDRs are expanded by the control plane with a minimum prefix of `/24`. The project limit is 8192 entries.
 - **Rule capacity limits**: `port_acl` supports up to 32 entries and `l7_scan.patterns` supports up to 8 entries due to the kernel 7.0 verifier instruction processing limit.
-- **Minimum memory**: `[limits].refuse_memory_mb` (default 256MB) refuses to start and `min_memory_mb` (default 512MB) warns. On a 400MB instance with nginx, sshd became unresponsive; do not permanently bypass with `ESHIELD_ALLOW_LOW_MEMORY=1`.
-- **Virtual NIC limitation**: native XDP_TX on veth and similar virtual NICs can trigger kernel issues. Test environments should use `ESHIELD_XDP_MODE=skb`.
+- **Minimum memory**: `[limits].refuse_memory_mb` (default 256MB) refuses to start and `min_memory_mb` (default 512MB) warns. On a 400MB instance with nginx, sshd became unresponsive; do not permanently bypass with `XUANARMOR_ALLOW_LOW_MEMORY=1`.
+- **Virtual NIC limitation**: native XDP_TX on veth and similar virtual NICs can trigger kernel issues. Test environments should use `XUANARMOR_XDP_MODE=skb`.
 - **Platform limitation**: Windows is not supported. Kernels without BTF are not supported.
 - **Missing physical NIC benchmarks**: current public benchmarks are based on veth. Physical NIC, multi-queue, small-packet pps, and latency figures must be measured in the target environment.
-- **Hub is not highly available**: `eshield-hub` is a single-instance stateful service; back it up and expect manual failover.
+- **Hub is not highly available**: `xuanarmor-hub` is a single-instance stateful service; back it up and expect manual failover.
 
 ## 15. Documentation
 

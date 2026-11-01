@@ -12,8 +12,8 @@
 前置条件：
     1. 本地已打 tag 并推送到 origin：git push origin <TAG>
     2. 已设置 GH_TOKEN（Classic token，需要 repo 权限）
-    3. 默认产物为 target/x86_64-unknown-linux-musl/release/eshield 和
-       target/bpfel-unknown-none/release/eshield；也可通过 ASSET_DIR 环境变量指定目录
+    3. 默认产物为 target/x86_64-unknown-linux-musl/release/xuanarmor 和
+       target/bpfel-unknown-none/release/xuanarmor；也可通过 ASSET_DIR 环境变量指定目录
 """
 
 import json
@@ -27,13 +27,13 @@ REPO = "BlkSword/XuanArmor"
 
 
 def current_version() -> str:
-    """从 eshield/Cargo.toml 读取当前版本。"""
+    """从 xuanarmor/Cargo.toml 读取当前版本。"""
     import re
 
-    text = Path("eshield/Cargo.toml").read_text(encoding="utf-8")
+    text = Path("xuanarmor/Cargo.toml").read_text(encoding="utf-8")
     m = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
     if not m:
-        print("错误：无法从 eshield/Cargo.toml 读取版本号")
+        print("错误：无法从 xuanarmor/Cargo.toml 读取版本号")
         sys.exit(1)
     return m.group(1)
 
@@ -44,8 +44,8 @@ TAG = f"v{VERSION}"
 # 默认产物目录：用户态 musl 二进制 + eBPF object
 # 可通过环境变量 ASSET_DIR 覆盖
 DEFAULT_ASSETS = [
-    Path(f"target/x86_64-unknown-linux-musl/release/eshield"),
-    Path(f"target/bpfel-unknown-none/release/eshield"),
+    Path(f"target/x86_64-unknown-linux-musl/release/xuanarmor"),
+    Path(f"target/bpfel-unknown-none/release/xuanarmor"),
 ]
 ASSET_DIR = Path(os.environ.get("ASSET_DIR", ""))
 

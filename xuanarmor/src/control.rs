@@ -1,0 +1,1980 @@
+use anyhow::Context;
+use aya::{
+    maps::{lpm_trie::Key as LpmKey, Array, HashMap as LruHashMap, LpmTrie},
+    Ebpf,
+};
+use xuanarmor_common::{
+    project_action, project_modules, rules, BlockEntry, GeoIpKeyV4, GeoIpKeyV6, IpFamily, IpKey,
+    L7Pattern, PortAclEntry, ProjectPolicy, ProjectPolicyKey, RateLimitConfig, RuntimeConfig,
+    TrustEntry, WhitelistKeyV4, WhitelistKeyV6, BLOCK_PERMANENT,
+};
+
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
+use tracing::{info, warn};
+
+use crate::adaptive::AdaptiveEngine;
+use crate::audit::{AuditAction, Auditor};
+use crate::config::{
+    Config, GeoIpConfig, L7ScanConfig, PortAclItem, ProtectionProject, ThreatFeed,
+};
+use crate::hub_client::{NodePolicy, SharedPolicy};
+use crate::ip::{format_ip_key, parse_cidr, parse_ip_or_cidr};
+use crate::store::RuleStore;
+
+/// 控制面共享状态，Web / CLI / SIGHUP 都通过它操作 eBPF Maps。
+pub struct ControlState {
+    pub ebpf: Arc<Mutex<Ebpf>>,
+    pub config_path: String,
+    pub runtime: RwLock<RuntimeConfigSnapshot>,
+    pub whitelist: Mutex<Vec<(IpKey, u32)>>,
+    pub blacklist: Mutex<Vec<IpKey>>,
+    pub geoip_blocks: Mutex<Vec<(IpKey, u32)>>,
+    pub geoip_allows: Mutex<Vec<(IpKey, u32)>>,
+    pub auditor: Option<Auditor>,
+    pub store: Option<RuleStore>,
+    pub hub_connected: std::sync::atomic::AtomicBool,
+    pub hub_active_url: std::sync::Mutex<String>,
+    pub hub_config: crate::config::HubConfig,
+    adaptive: Option<Arc<AdaptiveEngine>>,
+}
+
+/// 运行时可读快照（用于 Web / CLI 展示）。
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct RuntimeConfigSnapshot {
+    pub version: String,
+    pub interface: String,
+    pub web_port: u16,
+    pub web_bind: Option<String>,
+    pub log_level: String,
+    pub log_json: bool,
+    pub store_path: String,
+    pub alert_webhook_url: Option<String>,
+    pub alert_threshold_dps: u64,
+    pub alert_cooldown_s: u64,
+    pub rate_limit_enabled: bool,
+    pub syn_proxy_enabled: bool,
+    pub l7_scan_enabled: bool,
+    pub udp_flood_enabled: bool,
+    pub icmp_flood_enabled: bool,
+    pub geoip_enabled: bool,
+    pub tcp_reset_on_drop: bool,
+    pub trust_enabled: bool,
+    pub conn_track_enabled: bool,
+    pub conn_track_threshold: u32,
+    pub conn_track_window_ms: u64,
+    pub trust_add_divisor: u32,
+    pub trust_sub_divisor: u32,
+    pub geoip_default_action: u8,
+    pub danger_level: u8,
+    pub rate_limit: RateLimitParams,
+    pub port_rate_limit: RateLimitParams,
+    pub adaptive: crate::config::AdaptiveConfig,
+    pub port_acl: Vec<PortAclItem>,
+    pub protection_projects: Vec<ProtectionProject>,
+    pub l7_scan: L7ScanConfig,
+    pub geoip: GeoIpConfig,
+    pub threat_intel_feeds: Vec<ThreatFeed>,
+    pub whitelist_entries: Vec<String>,
+    pub blacklist_entries: Vec<String>,
+    pub hub_enabled: bool,
+    pub hub_node_name: String,
+    pub hub_urls: Vec<String>,
+    pub packet_log_enabled: bool,
+    pub packet_log_sample_rate: u16,
+    pub protection_projects_enabled: bool,
+    /// 非首片分片策略：pass | rate_limit | drop（v0.5.0）
+    pub fragment_policy: String,
+    /// 限速超限处置模式：hard | soft（v0.5.0）
+    pub rate_limit_block_mode: String,
+    /// 审计文件路径与开关（用于 /api/audit/verify）
+    pub audit_path: String,
+    pub audit_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct RateLimitParams {
+    pub enabled: bool,
+    pub threshold: u64,
+    pub tick_ms: u64,
+    pub decay_num: u64,
+    pub decay_den: u64,
+    pub block_duration_s: u64,
+    /// 计数维度（仅全局限速使用）：false=per-IP，true=per-IP+目的端口
+    #[serde(default)]
+    pub dport_grouping: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct RuntimeConfigPatch {
+    pub rate_limit_enabled: Option<bool>,
+    pub syn_proxy_enabled: Option<bool>,
+    pub l7_scan_enabled: Option<bool>,
+    pub udp_flood_enabled: Option<bool>,
+    pub icmp_flood_enabled: Option<bool>,
+    pub geoip_enabled: Option<bool>,
+    pub tcp_reset_on_drop: Option<bool>,
+    pub trust_enabled: Option<bool>,
+    pub conn_track_enabled: Option<bool>,
+    pub conn_track_threshold: Option<u32>,
+    pub conn_track_window_ms: Option<u64>,
+    pub trust_add_divisor: Option<u32>,
+    pub trust_sub_divisor: Option<u32>,
+    pub geoip_default_action: Option<u8>,
+    pub rate_limit: Option<RateLimitParams>,
+    pub port_rate_limit: Option<RateLimitParams>,
+    pub adaptive: Option<crate::config::AdaptiveConfig>,
+    /// pass | rate_limit | drop
+    pub fragment_policy: Option<String>,
+    /// hard | soft
+    pub rate_limit_block_mode: Option<String>,
+}
+
+impl ControlState {
+    pub async fn new(
+        ebpf: Arc<Mutex<Ebpf>>,
+        config_path: String,
+        config: &Config,
+        auditor: Option<Auditor>,
+        store: Option<RuleStore>,
+        adaptive: Option<Arc<AdaptiveEngine>>,
+    ) -> anyhow::Result<Self> {
+        let state = Self {
+            ebpf,
+            config_path,
+            runtime: RwLock::new(RuntimeConfigSnapshot::from_config(config)),
+            whitelist: Mutex::new(Vec::new()),
+            blacklist: Mutex::new(Vec::new()),
+            geoip_blocks: Mutex::new(Vec::new()),
+            geoip_allows: Mutex::new(Vec::new()),
+            auditor,
+            store,
+            hub_connected: std::sync::atomic::AtomicBool::new(false),
+            hub_active_url: std::sync::Mutex::new(String::new()),
+            hub_config: config.hub.clone(),
+            adaptive,
+        };
+
+        // 初始化运行时配置与策略
+        {
+            let mut guard = state.ebpf.lock().await;
+            init_rate_limit_map(&mut guard, config)?;
+            init_port_rate_map(&mut guard, config)?;
+            init_l7_patterns_map(&mut guard, &config.l7_scan.patterns)?;
+            init_port_acl_map(&mut guard, &config.port_acl)?;
+            init_protection_projects_map(&mut guard, &config.protection_projects)?;
+            let mut blacklist = state.blacklist.lock().await;
+            let mut whitelist = state.whitelist.lock().await;
+            let mut geoip_blocks = state.geoip_blocks.lock().await;
+            let mut geoip_allows = state.geoip_allows.lock().await;
+            apply_blacklist_map(&mut guard, config, &mut blacklist).await?;
+            apply_whitelist_map(&mut guard, config, &mut whitelist).await?;
+            apply_geoip_map(&mut guard, config, &mut geoip_blocks, &mut geoip_allows).await?;
+            // CONFIG 最后写入：geoip_default_action 翻转到 drop 时，
+            // 白名单与 GeoIP allow 列表必须已经就绪，否则会出现"全员被丢"的窗口。
+            init_config_map(&mut guard, config)?;
+        }
+
+        Ok(state)
+    }
+
+    /// 从配置文件重新加载全部策略。
+    pub async fn reload_config_file(&self) -> anyhow::Result<()> {
+        let config = Config::from_file(&self.config_path)?;
+        config
+            .validate()
+            .context("配置校验失败，拒绝热加载以避免部分策略生效")?;
+        let mut guard = self.ebpf.lock().await;
+        let mut whitelist = self.whitelist.lock().await;
+        let mut blacklist = self.blacklist.lock().await;
+        let mut geoip_blocks = self.geoip_blocks.lock().await;
+        let mut geoip_allows = self.geoip_allows.lock().await;
+
+        init_rate_limit_map(&mut guard, &config)?;
+        init_port_rate_map(&mut guard, &config)?;
+        init_l7_patterns_map(&mut guard, &config.l7_scan.patterns)?;
+        init_port_acl_map(&mut guard, &config.port_acl)?;
+        init_protection_projects_map(&mut guard, &config.protection_projects)?;
+        apply_whitelist_map(&mut guard, &config, &mut whitelist).await?;
+        apply_blacklist_map(&mut guard, &config, &mut blacklist).await?;
+        apply_geoip_map(&mut guard, &config, &mut geoip_blocks, &mut geoip_allows).await?;
+        // CONFIG 最后写入，避免 geoip_default_action 先翻到 drop、allow 列表尚未重建
+        // 导致管理连接被自己切断（见 docs/test-report-2026-10.md 6.1）。
+        init_config_map(&mut guard, &config)?;
+
+        let prev_danger = self.runtime.read().await.danger_level;
+        let mut new_snapshot = RuntimeConfigSnapshot::from_config(&config);
+        new_snapshot.danger_level = prev_danger;
+        *self.runtime.write().await = new_snapshot;
+        if let Some(adaptive) = &self.adaptive {
+            adaptive.update_config(config.adaptive.clone());
+        }
+        drop(guard);
+        drop(whitelist);
+        drop(blacklist);
+
+        // 重新应用持久化的动态规则，避免配置文件覆盖 API/自适应 产生的规则
+        if let Err(e) = self.load_persisted_rules().await {
+            tracing::warn!("failed to reload persisted rules: {}", e);
+        }
+
+        self.audit("system", AuditAction::ReloadConfig, serde_json::json!({}))
+            .await;
+        Ok(())
+    }
+
+    /// 实时封禁某个 IP（API 控制）。支持 IPv4/IPv6。
+    pub async fn block_ip(&self, ip_str: &str, duration_s: u64) -> anyhow::Result<()> {
+        let key = parse_ip_or_cidr(ip_str)?;
+        self.block_ip_key(
+            key,
+            duration_s,
+            rules::API_BLOCK as u8,
+            crate::config::BlockOrigin::Api,
+        )
+        .await?;
+        info!("API block: {} duration={}s", ip_str, duration_s);
+        Ok(())
+    }
+
+    /// 批量封禁同一时长/来源的 IP（威胁情报 feed 使用）。
+    /// eBPF map 只加一次锁，redb 只写一个事务，审计只记一条汇总。
+    pub async fn block_ip_keys_batch(
+        &self,
+        keys: Vec<IpKey>,
+        duration_s: u64,
+        reason: u8,
+        origin: crate::config::BlockOrigin,
+    ) -> anyhow::Result<usize> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        let now_ns = crate::time::monotonic_ns();
+        let blocked_until_ns = if duration_s == 0 {
+            BLOCK_PERMANENT
+        } else {
+            now_ns.saturating_add(duration_s.saturating_mul(1_000_000_000))
+        };
+
+        {
+            let mut guard = self.ebpf.lock().await;
+            let mut blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
+                .map_mut("BLACKLIST")
+                .context("BLACKLIST map not found")?
+                .try_into()?;
+            for key in &keys {
+                // 保留首次触发原因 / first_seen：批量封禁（威胁情报等）不应把
+                // 数据面已经记录的根因（速率限制、Flood 等）冲掉。语义见
+                // xuanarmor_common::pure::merge_block_entry（数据面与控制面共用同一份逻辑）。
+                let entry = xuanarmor_common::pure::merge_block_entry(
+                    blacklist.get(key, 0).ok(),
+                    now_ns,
+                    blocked_until_ns,
+                    reason,
+                    false,
+                );
+                blacklist.insert(*key, entry, 0)?;
+            }
+        }
+
+        if let Some(store) = &self.store {
+            store
+                .save_blacklist_many(&keys, blocked_until_ns, reason, now_ns, origin)
+                .await?;
+        }
+
+        self.audit(
+            origin_actor(origin),
+            AuditAction::BlockIp,
+            serde_json::json!({
+                "count": keys.len(),
+                "duration_s": duration_s,
+                "origin": origin,
+            }),
+        )
+        .await;
+        Ok(keys.len())
+    }
+
+    /// 通用封禁接口，供 API / 自适应 / 威胁情报 / Hub 下发使用。
+    pub async fn block_ip_key(
+        &self,
+        key: IpKey,
+        duration_s: u64,
+        reason: u8,
+        origin: crate::config::BlockOrigin,
+    ) -> anyhow::Result<()> {
+        self.block_ip_raw(key, duration_s, reason).await?;
+
+        if let Some(store) = &self.store {
+            let now_ns = crate::time::monotonic_ns();
+            let blocked_until_ns = if duration_s == 0 {
+                BLOCK_PERMANENT
+            } else {
+                let block_ns = duration_s.saturating_mul(1_000_000_000);
+                now_ns.saturating_add(block_ns)
+            };
+            store
+                .save_blacklist(key, blocked_until_ns, reason, now_ns, origin)
+                .await?;
+        }
+
+        self.audit(
+            origin_actor(origin),
+            AuditAction::BlockIp,
+            serde_json::json!({ "ip": format_ip_key(&key), "duration_s": duration_s, "origin": origin }),
+        )
+        .await;
+        Ok(())
+    }
+
+    async fn block_ip_raw(&self, key: IpKey, duration_s: u64, reason: u8) -> anyhow::Result<()> {
+        let mut guard = self.ebpf.lock().await;
+        let mut blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
+            .map_mut("BLACKLIST")
+            .context("BLACKLIST map not found")?
+            .try_into()?;
+
+        let now_ns = crate::time::monotonic_ns();
+        let blocked_until_ns = if duration_s == 0 {
+            BLOCK_PERMANENT
+        } else {
+            let block_ns = duration_s.saturating_mul(1_000_000_000);
+            now_ns.saturating_add(block_ns)
+        };
+
+        // 显式来源（管理 API / 静态配置）以本次原因为准，把旧原因记到 last_reason；
+        // 自动/策略来源（Hub、威胁情报）保留首次触发原因，只记录叠加原因。
+        // 语义与数据面共用 xuanarmor_common::pure::merge_block_entry。
+        let explicit = reason == rules::API_BLOCK as u8 || reason == rules::BLACKLIST as u8;
+        let entry = xuanarmor_common::pure::merge_block_entry(
+            blacklist.get(&key, 0).ok(),
+            now_ns,
+            blocked_until_ns,
+            reason,
+            explicit,
+        );
+
+        blacklist.insert(key, entry, 0)?;
+        Ok(())
+    }
+
+    /// 实时解封某个 IP。
+    pub async fn unblock_ip(&self, ip_str: &str) -> anyhow::Result<()> {
+        let key = parse_ip_or_cidr(ip_str)?;
+        self.unblock_ip_key(key, "api").await?;
+        info!("API unblock: {}", ip_str);
+        Ok(())
+    }
+
+    /// 按 IpKey 解封，供 Hub 删除同步等内部路径使用。
+    pub async fn unblock_ip_key(&self, key: IpKey, actor: &str) -> anyhow::Result<()> {
+        let mut guard = self.ebpf.lock().await;
+        let mut blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
+            .map_mut("BLACKLIST")
+            .context("BLACKLIST map not found")?
+            .try_into()?;
+        // 幂等：条目已不存在时 bpf_map_delete_elem 会报错，按成功处理。
+        let _ = blacklist.remove(&key);
+        drop(guard);
+
+        self.blacklist.lock().await.retain(|&x| x != key);
+
+        if let Some(store) = &self.store {
+            store.remove_blacklist(key).await?;
+        }
+
+        self.audit(
+            actor,
+            AuditAction::UnblockIp,
+            serde_json::json!({ "ip": format_ip_key(&key) }),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// 实时放行某个 CIDR（API 入口）。
+    pub async fn allow_cidr(&self, cidr: &str) -> anyhow::Result<()> {
+        let (key, prefix) = parse_cidr(cidr)?;
+        self.allow_cidr_key(key, prefix, "api").await?;
+        info!("API whitelist add: {}", cidr);
+        Ok(())
+    }
+
+    /// 按 IpKey + prefix 添加白名单，并持久化/审计；供 API 与威胁情报共享。
+    pub async fn allow_cidr_key(&self, key: IpKey, prefix: u32, actor: &str) -> anyhow::Result<()> {
+        self.allow_cidr_raw(key, prefix).await?;
+        if let Some(store) = &self.store {
+            store.save_whitelist(key, prefix).await?;
+        }
+        self.audit(
+            actor,
+            AuditAction::AllowCidr,
+            serde_json::json!({
+                "cidr": format!("{}/{}", format_ip_key(&key), prefix),
+            }),
+        )
+        .await;
+        Ok(())
+    }
+
+    pub(crate) async fn allow_cidr_raw(&self, key: IpKey, prefix: u32) -> anyhow::Result<()> {
+        let mut guard = self.ebpf.lock().await;
+
+        match key.family() {
+            Some(IpFamily::Ipv4) => {
+                let mut whitelist: LpmTrie<_, WhitelistKeyV4, u8> = guard
+                    .map_mut("WHITELIST_V4")
+                    .context("WHITELIST_V4 map not found")?
+                    .try_into()?;
+                whitelist.insert(
+                    &LpmKey::new(
+                        prefix,
+                        WhitelistKeyV4 {
+                            addr: key.ipv4().to_be(),
+                        },
+                    ),
+                    1,
+                    0,
+                )?;
+            }
+            Some(IpFamily::Ipv6) => {
+                let mut whitelist: LpmTrie<_, WhitelistKeyV6, u8> = guard
+                    .map_mut("WHITELIST_V6")
+                    .context("WHITELIST_V6 map not found")?
+                    .try_into()?;
+                whitelist.insert(
+                    &LpmKey::new(prefix, WhitelistKeyV6 { addr: key.addr }),
+                    1,
+                    0,
+                )?;
+            }
+            _ => anyhow::bail!("unknown IP family"),
+        }
+        Ok(())
+    }
+
+    /// 实时移除某个 CIDR 放行。
+    pub async fn disallow_cidr(&self, cidr: &str) -> anyhow::Result<()> {
+        let (key, prefix) = parse_cidr(cidr)?;
+        let mut guard = self.ebpf.lock().await;
+
+        match key.family() {
+            Some(IpFamily::Ipv4) => {
+                let mut whitelist: LpmTrie<_, WhitelistKeyV4, u8> = guard
+                    .map_mut("WHITELIST_V4")
+                    .context("WHITELIST_V4 map not found")?
+                    .try_into()?;
+                whitelist.remove(&LpmKey::new(
+                    prefix,
+                    WhitelistKeyV4 {
+                        addr: key.ipv4().to_be(),
+                    },
+                ))?;
+            }
+            Some(IpFamily::Ipv6) => {
+                let mut whitelist: LpmTrie<_, WhitelistKeyV6, u8> = guard
+                    .map_mut("WHITELIST_V6")
+                    .context("WHITELIST_V6 map not found")?
+                    .try_into()?;
+                whitelist.remove(&LpmKey::new(prefix, WhitelistKeyV6 { addr: key.addr }))?;
+            }
+            _ => anyhow::bail!("unknown IP family"),
+        }
+        drop(guard);
+
+        self.whitelist.lock().await.retain(|&x| x != (key, prefix));
+
+        if let Some(store) = &self.store {
+            store.remove_whitelist(key, prefix).await?;
+        }
+
+        self.audit(
+            "api",
+            AuditAction::DisallowCidr,
+            serde_json::json!({ "cidr": cidr }),
+        )
+        .await;
+        info!("API whitelist remove: {}", cidr);
+        Ok(())
+    }
+
+    /// 热更新部分运行时开关与速率限制参数。
+    pub async fn patch_runtime(&self, patch: RuntimeConfigPatch) -> anyhow::Result<()> {
+        validate_runtime_patch(&patch)?;
+        let mut snapshot = self.runtime.read().await.clone();
+
+        if let Some(enabled) = patch.rate_limit_enabled {
+            snapshot.rate_limit_enabled = enabled;
+            snapshot.rate_limit.enabled = enabled;
+        }
+        if let Some(enabled) = patch.syn_proxy_enabled {
+            snapshot.syn_proxy_enabled = enabled;
+        }
+        if let Some(enabled) = patch.l7_scan_enabled {
+            snapshot.l7_scan_enabled = enabled;
+        }
+        if let Some(enabled) = patch.udp_flood_enabled {
+            snapshot.udp_flood_enabled = enabled;
+        }
+        if let Some(enabled) = patch.icmp_flood_enabled {
+            snapshot.icmp_flood_enabled = enabled;
+        }
+        if let Some(enabled) = patch.geoip_enabled {
+            snapshot.geoip_enabled = enabled;
+        }
+        if let Some(enabled) = patch.tcp_reset_on_drop {
+            snapshot.tcp_reset_on_drop = enabled;
+        }
+        if let Some(enabled) = patch.trust_enabled {
+            snapshot.trust_enabled = enabled;
+        }
+        if let Some(enabled) = patch.conn_track_enabled {
+            snapshot.conn_track_enabled = enabled;
+        }
+        if let Some(threshold) = patch.conn_track_threshold {
+            snapshot.conn_track_threshold = threshold;
+        }
+        if let Some(window_ms) = patch.conn_track_window_ms {
+            snapshot.conn_track_window_ms = window_ms;
+        }
+        if let Some(divisor) = patch.trust_add_divisor {
+            snapshot.trust_add_divisor = divisor;
+        }
+        if let Some(divisor) = patch.trust_sub_divisor {
+            snapshot.trust_sub_divisor = divisor;
+        }
+        if let Some(action) = patch.geoip_default_action {
+            snapshot.geoip_default_action = action;
+        }
+        if let Some(ref policy) = patch.fragment_policy {
+            snapshot.fragment_policy = policy.to_ascii_lowercase();
+        }
+        if let Some(ref mode) = patch.rate_limit_block_mode {
+            snapshot.rate_limit_block_mode = mode.to_ascii_lowercase();
+        }
+        if let Some(ref adaptive_cfg) = patch.adaptive {
+            snapshot.adaptive = adaptive_cfg.clone();
+            if let Some(adaptive) = &self.adaptive {
+                adaptive.update_config(adaptive_cfg.clone());
+            }
+        }
+
+        let mut guard = self.ebpf.lock().await;
+
+        if let Some(ref rl) = patch.rate_limit {
+            snapshot.rate_limit = rl.clone();
+            snapshot.rate_limit_enabled = rl.enabled;
+            let mut rate_cfg: Array<_, RateLimitConfig> = guard
+                .map_mut("RATE_LIMIT_CFG")
+                .context("RATE_LIMIT_CFG map not found")?
+                .try_into()?;
+            rate_cfg.set(
+                0,
+                RateLimitConfig {
+                    threshold: rl.threshold,
+                    tick_ms: rl.tick_ms,
+                    decay_num: rl.decay_num,
+                    decay_den: rl.decay_den,
+                    block_duration_s: rl.block_duration_s,
+                },
+                0,
+            )?;
+        }
+
+        if let Some(ref prl) = patch.port_rate_limit {
+            snapshot.port_rate_limit = prl.clone();
+            let mut port_rate_cfg: Array<_, RateLimitConfig> = guard
+                .map_mut("PORT_RATE_LIMIT_CFG")
+                .context("PORT_RATE_LIMIT_CFG map not found")?
+                .try_into()?;
+            port_rate_cfg.set(
+                0,
+                RateLimitConfig {
+                    threshold: prl.threshold,
+                    tick_ms: prl.tick_ms,
+                    decay_num: 0,
+                    decay_den: 1,
+                    block_duration_s: 0,
+                },
+                0,
+            )?;
+        }
+
+        {
+            let mut config_array: Array<_, RuntimeConfig> = guard
+                .map_mut("CONFIG")
+                .context("CONFIG map not found")?
+                .try_into()?;
+            // 读取现有值再修改，保留 port_acl_count / l7_pattern_count / project_enabled
+            let mut cfg = config_array.get(&0, 0).unwrap_or_default();
+            cfg.rate_limit_enabled = u8::from(snapshot.rate_limit_enabled);
+            cfg.syn_proxy_enabled = u8::from(snapshot.syn_proxy_enabled);
+            cfg.l7_scan_enabled = u8::from(snapshot.l7_scan_enabled);
+            cfg.udp_flood_enabled = u8::from(snapshot.udp_flood_enabled);
+            cfg.icmp_flood_enabled = u8::from(snapshot.icmp_flood_enabled);
+            cfg.geoip_enabled = u8::from(snapshot.geoip_enabled);
+            cfg.geoip_default_action = snapshot.geoip_default_action;
+            cfg.tcp_reset_on_drop = u8::from(snapshot.tcp_reset_on_drop);
+            cfg.trust_enabled = u8::from(snapshot.trust_enabled);
+            cfg.conn_track_enabled = u8::from(snapshot.conn_track_enabled);
+            cfg.conn_track_threshold = snapshot.conn_track_threshold.max(1);
+            cfg.conn_track_window_ms = snapshot.conn_track_window_ms.max(1);
+            cfg.trust_add_divisor = snapshot.trust_add_divisor.max(1);
+            cfg.trust_sub_divisor = snapshot.trust_sub_divisor.max(1);
+            // danger_level 由 DangerMonitor 任务维护，PATCH 配置时必须保留当前值。
+            cfg.packet_log_enabled = u8::from(snapshot.packet_log_enabled);
+            cfg.packet_log_sample_rate = snapshot.packet_log_sample_rate;
+            cfg.project_enabled = u8::from(snapshot.protection_projects_enabled);
+            cfg.port_rate_limit_enabled = u8::from(snapshot.port_rate_limit.enabled);
+            cfg.rate_limit_dport_grouping = u8::from(snapshot.rate_limit.dport_grouping);
+            cfg.fragment_policy = fragment_policy_to_u8(&snapshot.fragment_policy);
+            cfg.rate_limit_soft = u8::from(snapshot.rate_limit_block_mode == "soft");
+            config_array.set(0, cfg, 0)?;
+        }
+
+        *self.runtime.write().await = snapshot;
+
+        self.audit(
+            "api",
+            AuditAction::PatchConfig,
+            serde_json::json!({ "patch": patch }),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// 由 DangerMonitor 调用：把全局危险等级同步到运行时快照与 eBPF CONFIG。
+    pub async fn set_danger_level(&self, level: u8) -> anyhow::Result<()> {
+        let level = level.min(2);
+        self.runtime.write().await.danger_level = level;
+        let mut guard = self.ebpf.lock().await;
+        let mut config_array: Array<_, RuntimeConfig> = guard
+            .map_mut("CONFIG")
+            .context("CONFIG map not found")?
+            .try_into()?;
+        let mut cfg = config_array.get(&0, 0).unwrap_or_default();
+        cfg.danger_level = level;
+        config_array.set(0, cfg, 0)?;
+        Ok(())
+    }
+
+    /// 重新加载 GeoIP CSV 并应用。
+    pub async fn reload_geoip(&self) -> anyhow::Result<()> {
+        let config = Config::from_file(&self.config_path)?;
+        config
+            .validate()
+            .context("配置校验失败，拒绝重新加载 GeoIP")?;
+        let mut guard = self.ebpf.lock().await;
+        let mut geoip_blocks = self.geoip_blocks.lock().await;
+        let mut geoip_allows = self.geoip_allows.lock().await;
+        apply_geoip_map(&mut guard, &config, &mut geoip_blocks, &mut geoip_allows).await?;
+        self.runtime.write().await.geoip = config.geoip.clone();
+        self.audit(
+            "api",
+            AuditAction::PatchConfig,
+            serde_json::json!({"geoip": config.geoip}),
+        )
+        .await;
+        info!("GeoIP reloaded");
+        Ok(())
+    }
+
+    /// 完全替换当前 L7 指纹模式，更新 eBPF Map、运行时快照与持久化存储。
+    pub async fn set_l7_patterns(
+        &self,
+        patterns: Vec<crate::config::L7PatternConfig>,
+    ) -> anyhow::Result<()> {
+        crate::config::validate_l7_patterns(&patterns)?;
+        {
+            let mut guard = self.ebpf.lock().await;
+            init_l7_patterns_map(&mut guard, &patterns)?;
+        }
+
+        self.runtime.write().await.l7_scan.patterns = patterns.clone();
+
+        if let Some(store) = &self.store {
+            store.save_l7_patterns(&patterns).await?;
+        }
+
+        self.audit(
+            "api",
+            AuditAction::PatchConfig,
+            serde_json::json!({ "l7_patterns": patterns }),
+        )
+        .await;
+        info!("L7 patterns updated: count={}", patterns.len());
+        Ok(())
+    }
+
+    /// 完全替换当前端口 ACL，更新 eBPF Map、运行时快照与持久化存储。
+    pub async fn set_port_acl(&self, items: Vec<PortAclItem>) -> anyhow::Result<()> {
+        crate::config::validate_port_acl_items(&items)?;
+        {
+            let mut guard = self.ebpf.lock().await;
+            init_port_acl_map(&mut guard, &items)?;
+        }
+
+        self.runtime.write().await.port_acl = items.clone();
+
+        if let Some(store) = &self.store {
+            store.save_port_acl_items(&items).await?;
+        }
+
+        self.audit(
+            "api",
+            AuditAction::PatchConfig,
+            serde_json::json!({ "port_acl": items }),
+        )
+        .await;
+        info!("port ACL updated: count={}", items.len());
+        Ok(())
+    }
+
+    /// 完全替换当前防护项目，更新 eBPF Map、运行时快照与持久化存储。
+    pub async fn set_protection_projects(
+        &self,
+        projects: Vec<ProtectionProject>,
+    ) -> anyhow::Result<()> {
+        crate::config::validate_protection_projects_list(&projects)?;
+        {
+            let mut guard = self.ebpf.lock().await;
+            init_protection_projects_map(&mut guard, &projects)?;
+        }
+
+        self.runtime.write().await.protection_projects = projects.clone();
+        self.runtime.write().await.protection_projects_enabled = !projects.is_empty();
+
+        if let Some(store) = &self.store {
+            store.save_protection_projects(&projects).await?;
+        }
+
+        self.audit(
+            "api",
+            AuditAction::PatchConfig,
+            serde_json::json!({ "protection_projects": projects }),
+        )
+        .await;
+        info!("protection projects updated: count={}", projects.len());
+        Ok(())
+    }
+
+    /// 从持久化存储加载动态规则并应用（不记录审计，避免启动/重载时产生大量日志）。
+    pub async fn load_persisted_rules(&self) -> anyhow::Result<()> {
+        let Some(store) = &self.store else {
+            return Ok(());
+        };
+
+        let now_ns = crate::time::monotonic_ns();
+        for (key, blocked_until_ns, reason, _first_seen_ns, _origin) in
+            store.load_blacklist().await?
+        {
+            // 静态黑名单由配置文件管理，不重复从持久化存储加载，避免旧配置残留。
+            if reason == rules::BLACKLIST as u8 {
+                continue;
+            }
+            // 已过期则跳过（BLOCK_PERMANENT 永不过期）
+            if blocked_until_ns != BLOCK_PERMANENT && blocked_until_ns <= now_ns {
+                continue;
+            }
+            let duration_s = if blocked_until_ns == BLOCK_PERMANENT {
+                0
+            } else {
+                blocked_until_ns.saturating_sub(now_ns) / 1_000_000_000
+            };
+            self.block_ip_raw(key, duration_s, reason).await?;
+        }
+
+        for (key, prefix) in store.load_whitelist().await? {
+            self.allow_cidr_raw(key, prefix).await?;
+        }
+
+        if let Ok(items) = store.load_port_acl_items().await {
+            if !items.is_empty() {
+                self.set_port_acl(items).await?;
+            }
+        }
+
+        if let Ok(patterns) = store.load_l7_patterns().await {
+            if !patterns.is_empty() {
+                self.set_l7_patterns(patterns).await?;
+            }
+        }
+
+        if let Ok(projects) = store.load_protection_projects().await {
+            if !projects.is_empty() {
+                self.set_protection_projects(projects).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 收集可上报给 Hub 的本地策略。
+    pub async fn collect_hub_publishable_policies(
+        &self,
+        since_ns: u64,
+        min_hits: u32,
+        min_trust: u32,
+        limit: usize,
+    ) -> anyhow::Result<Vec<NodePolicy>> {
+        let store = match &self.store {
+            Some(s) => s,
+            None => return Ok(Vec::new()),
+        };
+
+        let candidates = store.load_blacklist_since(since_ns).await?;
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 一次性读取 BLACKLIST 命中次数，然后释放该 map 的借用，再去读 TRUST_MAP。
+        let mut hits = Vec::with_capacity(candidates.len());
+        {
+            let mut guard = self.ebpf.lock().await;
+            let blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
+                .map_mut("BLACKLIST")
+                .context("BLACKLIST map not found")?
+                .try_into()?;
+            for (key, blocked_until_ns, reason, first_seen_ns, origin) in candidates {
+                if !origin.publishable() {
+                    continue;
+                }
+                let hit_count = match blacklist.get(&key, 0) {
+                    Ok(entry) => entry.hit_count,
+                    Err(_) => continue,
+                };
+                hits.push((
+                    key,
+                    blocked_until_ns,
+                    reason,
+                    first_seen_ns,
+                    origin,
+                    hit_count,
+                ));
+            }
+        }
+
+        let mut out = Vec::new();
+        let now_ns = crate::time::monotonic_ns();
+
+        for (key, blocked_until_ns, reason, _first_seen_ns, _origin, hit_count) in hits {
+            // 命中次数不足且“已经过期”的条目才跳过；
+            // BLOCK_PERMANENT(0) 和仍然有效的封禁都属于长期策略，应上报。
+            let expired = blocked_until_ns != BLOCK_PERMANENT && blocked_until_ns <= now_ns;
+            if hit_count < min_hits && expired {
+                continue;
+            }
+            let trust_score = self.lookup_trust_score(&key).await;
+            if trust_score > min_trust {
+                continue;
+            }
+            let ttl_s = if blocked_until_ns == BLOCK_PERMANENT {
+                0
+            } else {
+                blocked_until_ns.saturating_sub(now_ns) / 1_000_000_000
+            };
+            out.push(NodePolicy {
+                ip: key,
+                reason,
+                hit_count,
+                trust_score,
+                blocked_until_ns,
+                ttl_s,
+            });
+            if out.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// 从 eBPF TRUST_MAP 读取指定 IP 的信誉分，缩放为 0-100（与 Hub 协议一致）。
+    async fn lookup_trust_score(&self, key: &IpKey) -> u32 {
+        let mut guard = self.ebpf.lock().await;
+        let m = match guard.map_mut("TRUST_MAP") {
+            Some(m) => m,
+            None => return 0,
+        };
+        let trust_map = match LruHashMap::<_, IpKey, TrustEntry>::try_from(m) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::debug!("failed to open TRUST_MAP: {}", e);
+                return 0;
+            }
+        };
+        match trust_map.get(key, 0) {
+            Ok(entry) => (entry.trust_score / 10).min(100),
+            Err(_) => 0,
+        }
+    }
+
+    /// 应用从 Hub 拉取下来的共享策略。
+    pub async fn apply_hub_policies(&self, policies: &[SharedPolicy]) -> anyhow::Result<usize> {
+        if policies.is_empty() {
+            return Ok(0);
+        }
+
+        // 一次性读取本地已有黑名单，避免后续重复加锁
+        let existing: HashSet<IpKey> = {
+            let mut guard = self.ebpf.lock().await;
+            let blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
+                .map_mut("BLACKLIST")
+                .context("BLACKLIST map not found")?
+                .try_into()?;
+            let mut set = HashSet::new();
+            for (key, _) in blacklist.iter().flatten() {
+                set.insert(key);
+            }
+            set
+        };
+
+        let mut applied = 0usize;
+
+        let node_name = &self.hub_config.node_name;
+        for policy in policies {
+            if existing.contains(&policy.ip) {
+                continue;
+            }
+
+            // 跳过源自本节点的策略，避免本地封禁被 Hub 回传后永远无法自动解封。
+            if !node_name.is_empty() && policy.source_nodes.iter().any(|n| n == node_name) {
+                tracing::debug!(
+                    ip = ?policy.ip,
+                    "skip hub policy originating from this node"
+                );
+                continue;
+            }
+
+            // Hub 下发的共享策略使用 ttl_s 描述希望封禁的时长；
+            // ttl_s == 0 与节点本地语义一致，表示永久封禁。
+            let duration_s = policy.ttl_s;
+
+            self.block_ip_key(
+                policy.ip,
+                duration_s,
+                policy.reason,
+                crate::config::BlockOrigin::Hub,
+            )
+            .await?;
+
+            // 将 Hub 聚合后的信誉分同步到本地 TRUST_MAP，供数据面调制阈值。
+            if policy.trust_score > 0 {
+                self.set_trust_score(policy.ip, policy.trust_score * 10)
+                    .await;
+            }
+
+            applied += 1;
+        }
+
+        Ok(applied)
+    }
+
+    /// 将指定 IP 的信誉分写入 eBPF TRUST_MAP。
+    async fn set_trust_score(&self, key: IpKey, trust_score: u32) {
+        let trust_enabled = self.runtime.read().await.trust_enabled;
+        if !trust_enabled {
+            return;
+        }
+        let mut guard = self.ebpf.lock().await;
+        let m = match guard.map_mut("TRUST_MAP") {
+            Some(m) => m,
+            None => {
+                tracing::debug!("TRUST_MAP not found");
+                return;
+            }
+        };
+        let mut trust_map = match LruHashMap::<_, IpKey, TrustEntry>::try_from(m) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::debug!("failed to open TRUST_MAP: {}", e);
+                return;
+            }
+        };
+        let score = trust_score.min(1000);
+        let level = if score >= 700 {
+            1
+        } else if score >= 300 {
+            2
+        } else if score >= 100 {
+            3
+        } else {
+            4
+        };
+        let entry = TrustEntry {
+            trust_score: score,
+            pass_count: 0,
+            drop_count: 0,
+            last_update_ns: crate::time::monotonic_ns(),
+            level,
+            padding: [0; 3],
+        };
+        let _ = trust_map.insert(key, entry, 0);
+    }
+
+    /// 解封由 Hub 下发且已被 Hub 删除的 IP，避免误删本地策略。
+    pub async fn unblock_hub_policies(&self, ips: &[IpKey]) -> anyhow::Result<usize> {
+        let store = match &self.store {
+            Some(s) => s,
+            None => return Ok(0),
+        };
+
+        let rows = store.load_blacklist().await?;
+        let hub_set: HashSet<IpKey> = rows
+            .into_iter()
+            .filter(|(_, _, _, _, origin)| *origin == crate::config::BlockOrigin::Hub)
+            .map(|(key, _, _, _, _)| key)
+            .collect();
+
+        let mut unblocked = 0usize;
+        for ip in ips {
+            if hub_set.contains(ip) {
+                self.unblock_ip_key(*ip, "hub").await?;
+                unblocked += 1;
+            }
+        }
+        Ok(unblocked)
+    }
+
+    /// 应用从 Hub 统一下发的规则包（ACL / L7 / 防护项目）。
+    pub async fn apply_hub_rules(
+        &self,
+        bundle: &crate::hub_client::RuleBundle,
+    ) -> anyhow::Result<()> {
+        self.set_port_acl(bundle.port_acl.clone()).await?;
+        self.set_l7_patterns(bundle.l7_patterns.clone()).await?;
+        self.set_protection_projects(bundle.protection_projects.clone())
+            .await?;
+        self.audit(
+            "hub",
+            AuditAction::PatchConfig,
+            serde_json::json!({ "source": "hub_rules" }),
+        )
+        .await;
+        Ok(())
+    }
+
+    /// 返回用于 Hub 心跳的运行时统计摘要 JSON。
+    pub async fn stats_snapshot_json(&self) -> serde_json::Value {
+        let rt = self.runtime.read().await.clone();
+        serde_json::json!({
+            "interface": rt.interface,
+            "rate_limit_enabled": rt.rate_limit_enabled,
+            "adaptive_enabled": rt.adaptive.enabled,
+            "trust_enabled": rt.trust_enabled,
+            "danger_level": rt.danger_level,
+        })
+    }
+
+    async fn audit(
+        &self,
+        actor: impl Into<String>,
+        action: AuditAction,
+        detail: serde_json::Value,
+    ) {
+        if let Some(auditor) = &self.auditor {
+            auditor.log(actor, action, detail, None).await;
+        }
+    }
+}
+
+/// PATCH /api/config 的字段级校验。配置文件校验在 `Config::validate`，
+/// 但 API/Hub 不经过配置文件，必须在进入 eBPF Map 前拦截非法阈值。
+fn validate_runtime_patch(patch: &RuntimeConfigPatch) -> anyhow::Result<()> {
+    if let Some(rl) = &patch.rate_limit {
+        if rl.enabled {
+            anyhow::ensure!(rl.threshold > 0, "rate_limit.threshold must be > 0");
+            anyhow::ensure!(rl.tick_ms > 0, "rate_limit.tick_ms must be > 0");
+            anyhow::ensure!(rl.decay_den > 0, "rate_limit.decay_den must be > 0");
+        }
+    }
+    if let Some(prl) = &patch.port_rate_limit {
+        if prl.enabled {
+            anyhow::ensure!(prl.threshold > 0, "port_rate_limit.threshold must be > 0");
+            anyhow::ensure!(prl.tick_ms > 0, "port_rate_limit.tick_ms must be > 0");
+        }
+    }
+    if let Some(ad) = &patch.adaptive {
+        anyhow::ensure!(ad.window_s > 0, "adaptive.window_s must be > 0");
+        if ad.enabled {
+            anyhow::ensure!(ad.threshold > 0, "adaptive.threshold must be > 0");
+        }
+    }
+    if let Some(threshold) = patch.conn_track_threshold {
+        anyhow::ensure!(threshold > 0, "conn_track_threshold must be > 0");
+    }
+    if let Some(window_ms) = patch.conn_track_window_ms {
+        anyhow::ensure!(window_ms > 0, "conn_track_window_ms must be > 0");
+    }
+    if let Some(d) = patch.trust_add_divisor {
+        anyhow::ensure!(d > 0, "trust_add_divisor must be > 0");
+    }
+    if let Some(d) = patch.trust_sub_divisor {
+        anyhow::ensure!(d > 0, "trust_sub_divisor must be > 0");
+    }
+    if let Some(action) = patch.geoip_default_action {
+        anyhow::ensure!(action <= 1, "geoip_default_action must be 0 or 1");
+    }
+    if let Some(ref policy) = patch.fragment_policy {
+        anyhow::ensure!(
+            matches!(
+                policy.to_ascii_lowercase().as_str(),
+                "pass" | "rate_limit" | "drop"
+            ),
+            "fragment_policy must be pass | rate_limit | drop"
+        );
+    }
+    if let Some(ref mode) = patch.rate_limit_block_mode {
+        anyhow::ensure!(
+            matches!(mode.to_ascii_lowercase().as_str(), "hard" | "soft"),
+            "rate_limit_block_mode must be hard | soft"
+        );
+    }
+    Ok(())
+}
+
+/// 分片策略字符串 → eBPF 编码（0=pass, 1=rate_limit, 2=drop）。
+pub(crate) fn fragment_policy_to_u8(policy: &str) -> u8 {
+    match policy.to_ascii_lowercase().as_str() {
+        "rate_limit" => 1,
+        "drop" => 2,
+        _ => 0,
+    }
+}
+
+impl RuntimeConfigSnapshot {
+    fn from_config(config: &Config) -> Self {
+        Self {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            interface: config.interface.clone(),
+            web_port: config.web_port,
+            web_bind: config.web_bind.clone(),
+            log_level: config.log_level.clone(),
+            log_json: config.log_json,
+            store_path: config.store_path.clone(),
+            alert_webhook_url: config.alert_webhook_url.clone(),
+            alert_threshold_dps: config.alert_threshold_dps,
+            alert_cooldown_s: config.alert_cooldown_s,
+            rate_limit_enabled: config.rate_limit.enabled,
+            syn_proxy_enabled: config.syn_proxy.enabled,
+            l7_scan_enabled: config.l7_scan.enabled,
+            udp_flood_enabled: config.udp_flood_enabled,
+            icmp_flood_enabled: config.icmp_flood_enabled,
+            geoip_enabled: config.geoip.enabled,
+            tcp_reset_on_drop: config.tcp_reset_on_drop,
+            trust_enabled: config.trust_score.enabled,
+            conn_track_enabled: config.conn_track.enabled,
+            conn_track_threshold: config.conn_track.threshold.max(1),
+            conn_track_window_ms: config.conn_track.window_ms.max(1),
+            trust_add_divisor: config.trust_score.add_divisor.max(1),
+            trust_sub_divisor: config.trust_score.sub_divisor.max(1),
+            geoip_default_action: if config.geoip.default_action == "drop" {
+                1
+            } else {
+                0
+            },
+            danger_level: 0,
+            adaptive: config.adaptive.clone(),
+            rate_limit: RateLimitParams {
+                enabled: config.rate_limit.enabled,
+                threshold: config.rate_limit.threshold,
+                tick_ms: config.rate_limit.tick_ms,
+                decay_num: config.rate_limit.decay_num,
+                decay_den: config.rate_limit.decay_den,
+                block_duration_s: config.rate_limit.block_duration_s,
+                dport_grouping: config.rate_limit.dport_grouping,
+            },
+            port_rate_limit: RateLimitParams {
+                enabled: config.port_rate_limit.enabled,
+                threshold: config.port_rate_limit.threshold,
+                tick_ms: config.port_rate_limit.tick_ms,
+                decay_num: 0,
+                decay_den: 0,
+                block_duration_s: 0,
+                dport_grouping: false,
+            },
+            fragment_policy: config.xdp.fragment_policy.clone(),
+            rate_limit_block_mode: config.rate_limit.block_mode.clone(),
+            audit_path: config.audit.path.clone(),
+            audit_enabled: config.audit.enabled,
+            port_acl: config.port_acl.clone(),
+            protection_projects: config.protection_projects.clone(),
+            l7_scan: config.l7_scan.clone(),
+            geoip: config.geoip.clone(),
+            threat_intel_feeds: config.threat_intel.feeds.clone(),
+            whitelist_entries: config.whitelist.clone(),
+            blacklist_entries: config.blacklist.clone(),
+            hub_enabled: config.hub.enabled,
+            hub_node_name: config.hub.node_name.clone(),
+            hub_urls: config.hub.urls.clone(),
+            packet_log_enabled: config.packet_log.enabled,
+            packet_log_sample_rate: config.packet_log.sample_rate,
+            protection_projects_enabled: !config.protection_projects.is_empty(),
+        }
+    }
+}
+
+fn origin_actor(origin: crate::config::BlockOrigin) -> &'static str {
+    match origin {
+        crate::config::BlockOrigin::Api => "api",
+        crate::config::BlockOrigin::Adaptive => "adaptive",
+        crate::config::BlockOrigin::ThreatIntel => "threat_intel",
+        crate::config::BlockOrigin::Hub => "hub",
+        crate::config::BlockOrigin::Local => "local",
+    }
+}
+
+fn init_config_map(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<()> {
+    let mut config_array: Array<_, RuntimeConfig> = ebpf
+        .map_mut("CONFIG")
+        .context("CONFIG map not found")?
+        .try_into()?;
+    let runtime = RuntimeConfig {
+        trust_add_divisor: config.trust_score.add_divisor.max(1),
+        trust_sub_divisor: config.trust_score.sub_divisor.max(1),
+        packet_log_sample_rate: config.packet_log.sample_rate,
+        rate_limit_enabled: u8::from(config.rate_limit.enabled),
+        syn_proxy_enabled: u8::from(config.syn_proxy.enabled),
+        l7_scan_enabled: u8::from(config.l7_scan.enabled),
+        udp_flood_enabled: u8::from(config.udp_flood_enabled),
+        icmp_flood_enabled: u8::from(config.icmp_flood_enabled),
+        geoip_enabled: u8::from(config.geoip.enabled),
+        geoip_default_action: if config.geoip.default_action == "drop" {
+            1
+        } else {
+            0
+        },
+        tcp_reset_on_drop: u8::from(config.tcp_reset_on_drop),
+        trust_enabled: u8::from(config.trust_score.enabled),
+        conn_track_enabled: u8::from(config.conn_track.enabled),
+        conn_track_threshold: config.conn_track.threshold.max(1),
+        conn_track_window_ms: config.conn_track.window_ms.max(1),
+        padding0: [0; 4],
+        danger_level: 0,
+        packet_log_enabled: u8::from(config.packet_log.enabled),
+        project_enabled: u8::from(!config.protection_projects.is_empty()),
+        port_acl_count: (config.port_acl.len() as u8).min(xuanarmor_common::MAX_PORT_ACL as u8),
+        l7_pattern_count: (config.l7_scan.patterns.len() as u8)
+            .min(xuanarmor_common::MAX_L7_PATTERNS as u8),
+        port_rate_limit_enabled: u8::from(config.port_rate_limit.enabled),
+        rate_limit_dport_grouping: u8::from(config.rate_limit.dport_grouping),
+        fragment_policy: fragment_policy_to_u8(&config.xdp.fragment_policy),
+        rate_limit_soft: u8::from(config.rate_limit.block_mode.eq_ignore_ascii_case("soft")),
+        padding: [0; 3],
+    };
+    tracing::debug!(
+        "init_config_map: tcp_reset_on_drop={} trust={}/{} geoip_default={}",
+        runtime.tcp_reset_on_drop,
+        runtime.trust_add_divisor,
+        runtime.trust_sub_divisor,
+        runtime.geoip_default_action
+    );
+    config_array.set(0, runtime, 0)?;
+    Ok(())
+}
+
+fn init_rate_limit_map(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<()> {
+    let mut rate_cfg: Array<_, RateLimitConfig> = ebpf
+        .map_mut("RATE_LIMIT_CFG")
+        .context("RATE_LIMIT_CFG map not found")?
+        .try_into()?;
+    rate_cfg.set(
+        0,
+        RateLimitConfig {
+            threshold: config.rate_limit.threshold,
+            tick_ms: config.rate_limit.tick_ms,
+            decay_num: config.rate_limit.decay_num,
+            decay_den: config.rate_limit.decay_den,
+            block_duration_s: config.rate_limit.block_duration_s,
+        },
+        0,
+    )?;
+    Ok(())
+}
+
+fn init_port_rate_map(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<()> {
+    let mut rate_cfg: Array<_, RateLimitConfig> = ebpf
+        .map_mut("PORT_RATE_LIMIT_CFG")
+        .context("PORT_RATE_LIMIT_CFG map not found")?
+        .try_into()?;
+    rate_cfg.set(
+        0,
+        RateLimitConfig {
+            threshold: config.port_rate_limit.threshold,
+            tick_ms: config.port_rate_limit.tick_ms,
+            decay_num: 0,
+            decay_den: 1,
+            block_duration_s: 0,
+        },
+        0,
+    )?;
+    Ok(())
+}
+
+fn init_l7_patterns_map(
+    ebpf: &mut Ebpf,
+    pattern_cfgs: &[crate::config::L7PatternConfig],
+) -> anyhow::Result<()> {
+    let mut patterns: Array<_, L7Pattern> = ebpf
+        .map_mut("L7_PATTERNS")
+        .context("L7_PATTERNS map not found")?
+        .try_into()?;
+
+    // 先清空旧模式
+    for i in 0..xuanarmor_common::MAX_L7_PATTERNS as u32 {
+        let _ = patterns.set(i, xuanarmor_common::L7Pattern::default(), 0);
+    }
+
+    for (i, pat_cfg) in pattern_cfgs
+        .iter()
+        .enumerate()
+        .take(xuanarmor_common::MAX_L7_PATTERNS)
+    {
+        let pattern_bytes = pat_cfg.pattern.as_bytes();
+        if pattern_bytes.len() > 8 {
+            anyhow::bail!("L7 pattern {} exceeds 8 bytes", i);
+        }
+
+        let mut sig = [0u8; 8];
+        let mut mask = [0u8; 8];
+
+        if let Some(mask_str) = &pat_cfg.mask {
+            let mask_bytes = mask_str.as_bytes();
+            if mask_bytes.len() != pattern_bytes.len() {
+                anyhow::bail!("L7 pattern {} mask length mismatch", i);
+            }
+            sig[..pattern_bytes.len()].copy_from_slice(pattern_bytes);
+            mask[..mask_bytes.len()].copy_from_slice(mask_bytes);
+        } else {
+            sig[..pattern_bytes.len()].copy_from_slice(pattern_bytes);
+            mask[..pattern_bytes.len()].fill(0xff);
+        }
+
+        patterns.set(
+            i as u32,
+            xuanarmor_common::L7Pattern {
+                signature: u64::from_le_bytes(sig),
+                mask: u64::from_le_bytes(mask),
+                length: pattern_bytes.len() as u8,
+                action: 0, // DROP
+                padding: [0; 6],
+            },
+            0,
+        )?;
+    }
+
+    // 同步实际模式条数到 CONFIG map，数据面据此跳过空表循环
+    sync_config_count(ebpf, |cfg| {
+        cfg.l7_pattern_count =
+            (pattern_cfgs.len() as u8).min(xuanarmor_common::MAX_L7_PATTERNS as u8);
+    })?;
+
+    Ok(())
+}
+
+/// 在 CONFIG map 上应用计数同步闭包。
+fn sync_config_count(ebpf: &mut Ebpf, f: impl FnOnce(&mut RuntimeConfig)) -> anyhow::Result<()> {
+    let mut config_array: Array<_, RuntimeConfig> = ebpf
+        .map_mut("CONFIG")
+        .context("CONFIG map not found")?
+        .try_into()?;
+    if let Ok(mut cfg) = config_array.get(&0, 0) {
+        f(&mut cfg);
+        let _ = config_array.set(0, cfg, 0);
+    }
+    Ok(())
+}
+
+fn init_port_acl_map(ebpf: &mut Ebpf, items: &[PortAclItem]) -> anyhow::Result<()> {
+    let mut port_acl: Array<_, PortAclEntry> = ebpf
+        .map_mut("PORT_ACL")
+        .context("PORT_ACL map not found")?
+        .try_into()?;
+
+    // 清空全部 PORT_ACL 槽位
+    for i in 0..xuanarmor_common::MAX_PORT_ACL as u32 {
+        let _ = port_acl.set(i, PortAclEntry::default(), 0);
+    }
+
+    for (i, item) in items.iter().enumerate() {
+        if i >= xuanarmor_common::MAX_PORT_ACL {
+            anyhow::bail!(
+                "too many port_acl entries (max {})",
+                xuanarmor_common::MAX_PORT_ACL
+            );
+        }
+        let entry = item
+            .to_entry()
+            .with_context(|| format!("invalid port_acl entry {}", i))?;
+        port_acl.set(i as u32, entry, 0)?;
+    }
+
+    // 同步实际规则条数到 CONFIG map，数据面据此跳过空表循环
+    sync_config_count(ebpf, |cfg| {
+        cfg.port_acl_count = (items.len() as u8).min(xuanarmor_common::MAX_PORT_ACL as u8);
+    })?;
+
+    Ok(())
+}
+
+fn init_protection_projects_map(
+    ebpf: &mut Ebpf,
+    projects: &[ProtectionProject],
+) -> anyhow::Result<()> {
+    const MAX_ENTRIES: usize = 8192;
+
+    // 先在内存中完成全部展开与校验，确认不超容量后再清空/写入 map，
+    // 避免中途出错把旧策略清掉却只写入一部分新策略。
+    let mut entries: Vec<(ProjectPolicyKey, ProjectPolicy)> = Vec::new();
+    for (i, proj) in projects.iter().enumerate() {
+        let protocol = match proj.protocol.to_lowercase().as_str() {
+            "any" => 0u8,
+            "tcp" => 6u8,
+            "udp" => 17u8,
+            "icmp" => 1u8,
+            "icmpv6" => 58u8,
+            _ => anyhow::bail!(
+                "protection_projects[{}]: invalid protocol '{}'",
+                i,
+                proj.protocol
+            ),
+        };
+        let dport: u16 = if proj.dport == "any" {
+            0
+        } else {
+            proj.dport
+                .parse()
+                .with_context(|| format!("protection_projects[{}]: invalid dport", i))?
+        };
+        let action = match proj.action.to_lowercase().as_str() {
+            "pass" => project_action::PASS,
+            "drop" => project_action::DROP,
+            "defend" => project_action::DEFEND,
+            _ => anyhow::bail!(
+                "protection_projects[{}]: invalid action '{}'",
+                i,
+                proj.action
+            ),
+        };
+
+        // enabled_modules → 位图；未配置时用全开哨兵，保持旧 DEFEND 行为。
+        let mut flags: u16 = 0;
+        for m in &proj.enabled_modules {
+            let bit = match m.as_str() {
+                "syn_flood" => Some(project_modules::SYN_FLOOD),
+                "udp_flood" => Some(project_modules::UDP_FLOOD),
+                "icmp_flood" => Some(project_modules::ICMP_FLOOD),
+                "rate_limit" => Some(project_modules::RATE_LIMIT),
+                "adaptive" => Some(project_modules::ADAPTIVE),
+                "l7_scan" => Some(project_modules::L7_SCAN),
+                "geoip" => Some(project_modules::GEOIP),
+                "tcp_reset" => Some(project_modules::TCP_RESET),
+                "port_acl" => Some(project_modules::PORT_ACL),
+                "conn_track" => Some(project_modules::CONN_TRACK),
+                _ => None,
+            };
+            if let Some(b) = bit {
+                flags |= b;
+            }
+        }
+
+        for ip in &proj.target_ips {
+            let (key, prefix) = if let Ok(k) = crate::ip::parse_ip(ip) {
+                (k, 32u32)
+            } else {
+                crate::ip::parse_cidr(ip).with_context(|| {
+                    format!("protection_projects[{}]: invalid target '{}'", i, ip)
+                })?
+            };
+            if key.family() != Some(IpFamily::Ipv4) {
+                info!(
+                    "protection project '{}': IPv6 target {} skipped (data plane IPv4 only)",
+                    proj.name, ip
+                );
+                continue;
+            }
+            if prefix < 24 {
+                anyhow::bail!(
+                    "protection_projects[{}]: target '{}' prefix /{} too broad (min /24)",
+                    i,
+                    ip,
+                    prefix
+                );
+            }
+            let base = key.ipv4();
+            let host_bits = 32 - prefix;
+            let count = 1u32 << host_bits;
+            if entries.len() + count as usize > MAX_ENTRIES {
+                anyhow::bail!(
+                    "protection projects exceed PROJECT_POLICY map capacity ({} entries)",
+                    MAX_ENTRIES
+                );
+            }
+            for h in 0..count {
+                entries.push((
+                    ProjectPolicyKey {
+                        addr: (base | h).to_be(),
+                        dport: dport.to_be(),
+                        protocol,
+                        padding: 0,
+                    },
+                    ProjectPolicy {
+                        flags,
+                        action,
+                        padding: [0; 5],
+                    },
+                ));
+            }
+        }
+    }
+
+    let mut map: LruHashMap<_, ProjectPolicyKey, ProjectPolicy> = ebpf
+        .map_mut("PROJECT_POLICY")
+        .context("PROJECT_POLICY map not found")?
+        .try_into()?;
+    // 全量清空旧条目后重建（项目数量小，重建比 diff 更简单可靠）
+    let stale: Vec<ProjectPolicyKey> = map.iter().flatten().map(|(k, _)| k).collect();
+    for key in stale {
+        let _ = map.remove(&key);
+    }
+    let total = entries.len();
+    for (key, policy) in entries {
+        map.insert(key, policy, 0)?;
+    }
+
+    if !projects.is_empty() {
+        info!(
+            "protection_projects loaded into data plane: projects={} entries={}",
+            projects.len(),
+            total
+        );
+    }
+
+    // 同步 project_enabled 标志到 CONFIG map，数据面据此快速跳过空表查询
+    let mut config_array: Array<_, RuntimeConfig> = ebpf
+        .map_mut("CONFIG")
+        .context("CONFIG map not found")?
+        .try_into()?;
+    if let Ok(mut cfg) = config_array.get(&0, 0) {
+        cfg.project_enabled = u8::from(total > 0);
+        let _ = config_array.set(0, cfg, 0);
+    }
+
+    Ok(())
+}
+
+async fn apply_whitelist_map(
+    ebpf: &mut Ebpf,
+    config: &Config,
+    current: &mut Vec<(IpKey, u32)>,
+) -> anyhow::Result<()> {
+    let new: HashSet<(IpKey, u32)> = config
+        .whitelist
+        .iter()
+        .map(|s| parse_cidr(s))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .collect();
+
+    // 先分别收集 v4 / v6 的删除与新增项，避免同时借用两个 map
+    let mut remove_v4 = Vec::new();
+    let mut remove_v6 = Vec::new();
+    for (key, prefix) in current.iter().copied() {
+        if !new.contains(&(key, prefix)) {
+            match key.family() {
+                Some(IpFamily::Ipv4) => remove_v4.push((key.ipv4(), prefix)),
+                Some(IpFamily::Ipv6) => remove_v6.push((key.addr, prefix)),
+                _ => {}
+            }
+            info!(
+                "removed whitelist entry: {}/{}",
+                format_ip_key(&key),
+                prefix
+            );
+        }
+    }
+
+    let mut add_v4 = Vec::new();
+    let mut add_v6 = Vec::new();
+    for (addr, prefix) in &new {
+        if !current.contains(&(*addr, *prefix)) {
+            match addr.family() {
+                Some(IpFamily::Ipv4) => add_v4.push((addr.ipv4(), *prefix)),
+                Some(IpFamily::Ipv6) => add_v6.push((addr.addr, *prefix)),
+                _ => {}
+            }
+            info!("added whitelist entry: {}/{}", format_ip_key(addr), prefix);
+        }
+    }
+
+    {
+        let mut whitelist_v4: LpmTrie<_, WhitelistKeyV4, u8> = ebpf
+            .map_mut("WHITELIST_V4")
+            .context("WHITELIST_V4 map not found")?
+            .try_into()?;
+        for (addr, prefix) in remove_v4 {
+            whitelist_v4.remove(&LpmKey::new(prefix, WhitelistKeyV4 { addr: addr.to_be() }))?;
+        }
+        for (addr, prefix) in add_v4 {
+            whitelist_v4.insert(
+                &LpmKey::new(prefix, WhitelistKeyV4 { addr: addr.to_be() }),
+                1,
+                0,
+            )?;
+        }
+    }
+
+    {
+        let mut whitelist_v6: LpmTrie<_, WhitelistKeyV6, u8> = ebpf
+            .map_mut("WHITELIST_V6")
+            .context("WHITELIST_V6 map not found")?
+            .try_into()?;
+        for (addr, prefix) in remove_v6 {
+            whitelist_v6.remove(&LpmKey::new(prefix, WhitelistKeyV6 { addr }))?;
+        }
+        for (addr, prefix) in add_v6 {
+            whitelist_v6.insert(&LpmKey::new(prefix, WhitelistKeyV6 { addr }), 1, 0)?;
+        }
+    }
+
+    current.clear();
+    current.extend(new);
+    Ok(())
+}
+
+async fn apply_blacklist_map(
+    ebpf: &mut Ebpf,
+    config: &Config,
+    current: &mut Vec<IpKey>,
+) -> anyhow::Result<()> {
+    let mut blacklist: LruHashMap<_, IpKey, BlockEntry> = ebpf
+        .map_mut("BLACKLIST")
+        .context("BLACKLIST map not found")?
+        .try_into()?;
+
+    let new: HashSet<IpKey> = config
+        .blacklist
+        .iter()
+        .map(|s| parse_ip_or_cidr(s))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .collect();
+
+    // 仅移除由配置文件加入的静态黑名单（reason == BLACKLIST），保留 API / 自适应封禁
+    for key in current.iter() {
+        if !new.contains(key) {
+            if let Ok(entry) = blacklist.get(key, 0) {
+                if entry.block_reason == rules::BLACKLIST as u8 {
+                    blacklist.remove(key)?;
+                    info!("removed static blacklist entry: {}", format_ip_key(key));
+                }
+            }
+        }
+    }
+
+    for key in &new {
+        if !current.contains(key) {
+            let entry = BlockEntry {
+                blocked_until_ns: BLOCK_PERMANENT,
+                block_reason: rules::BLACKLIST as u8,
+                hit_count: 0,
+                first_seen_ns: 0,
+                last_reason: 0,
+                padding: [0; 2],
+            };
+            blacklist.insert(*key, entry, 0)?;
+            info!("added static blacklist entry: {}", format_ip_key(key));
+        }
+    }
+
+    current.clear();
+    current.extend(new);
+    Ok(())
+}
+
+async fn apply_geoip_map(
+    ebpf: &mut Ebpf,
+    config: &Config,
+    current_blocks: &mut Vec<(IpKey, u32)>,
+    current_allows: &mut Vec<(IpKey, u32)>,
+) -> anyhow::Result<()> {
+    // 先分类旧条目，避免同时借用多个 map。
+    let mut old_blocks_v4 = Vec::new();
+    let mut old_blocks_v6 = Vec::new();
+    let mut old_allows_v4 = Vec::new();
+    let mut old_allows_v6 = Vec::new();
+    for (key, prefix) in current_blocks.drain(..) {
+        match key.family() {
+            Some(IpFamily::Ipv4) => old_blocks_v4.push((key.ipv4(), prefix)),
+            Some(IpFamily::Ipv6) => old_blocks_v6.push((key.addr, prefix)),
+            _ => {}
+        }
+    }
+    for (key, prefix) in current_allows.drain(..) {
+        match key.family() {
+            Some(IpFamily::Ipv4) => old_allows_v4.push((key.ipv4(), prefix)),
+            Some(IpFamily::Ipv6) => old_allows_v6.push((key.addr, prefix)),
+            _ => {}
+        }
+    }
+
+    // 无论配置里的 enabled 是什么都重建规则表：enabled 只控制数据面是否启用
+    // （CONFIG.geoip_enabled），规则本身必须与配置文件保持一致。
+    // 旧实现会在 enabled=false 时直接清空表并返回 —— 于是「运行时用 API 打开
+    // GeoIP + POST /api/geoip/reload」会静默把数据面规则清空且不报错。
+    if config.geoip.db_path.is_some() {
+        warn!(
+            "geoip.db_path (MaxMind MMDB) is reserved but not supported yet; use CSV lists instead"
+        );
+    }
+
+    let blocks = crate::geoip::load_geoip_blocks(&config.geoip)?;
+    let allows = crate::geoip::load_geoip_allows(&config.geoip)?;
+    if config.geoip.default_action == "drop" && allows.is_empty() {
+        warn!(
+            "geoip.default_action=drop but allow_countries/allow_asns is empty; all GeoIP traffic will be dropped"
+        );
+    }
+
+    let mut new_blocks_v4 = Vec::new();
+    let mut new_blocks_v6 = Vec::new();
+    for block in blocks {
+        match block.key.family() {
+            Some(IpFamily::Ipv4) => new_blocks_v4.push((block.key.ipv4(), block.prefix)),
+            Some(IpFamily::Ipv6) => new_blocks_v6.push((block.key.addr, block.prefix)),
+            _ => continue,
+        }
+        info!(
+            "added GeoIP block: {}/{} {}",
+            format_ip_key(&block.key),
+            block.prefix,
+            block.reason
+        );
+        current_blocks.push((block.key, block.prefix));
+    }
+
+    let mut new_allows_v4 = Vec::new();
+    let mut new_allows_v6 = Vec::new();
+    for allow in allows {
+        match allow.key.family() {
+            Some(IpFamily::Ipv4) => new_allows_v4.push((allow.key.ipv4(), allow.prefix)),
+            Some(IpFamily::Ipv6) => new_allows_v6.push((allow.key.addr, allow.prefix)),
+            _ => continue,
+        }
+        info!(
+            "added GeoIP allow: {}/{} {}",
+            format_ip_key(&allow.key),
+            allow.prefix,
+            allow.reason
+        );
+        current_allows.push((allow.key, allow.prefix));
+    }
+
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV4, u8> = ebpf
+            .map_mut("GEOIP_BLOCKED_V4")
+            .context("GEOIP_BLOCKED_V4 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in &new_blocks_v4 {
+            map.insert(
+                &LpmKey::new(prefix, GeoIpKeyV4 { addr: addr.to_be() }),
+                1,
+                0,
+            )?;
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV6, u8> = ebpf
+            .map_mut("GEOIP_BLOCKED_V6")
+            .context("GEOIP_BLOCKED_V6 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in &new_blocks_v6 {
+            map.insert(&LpmKey::new(prefix, GeoIpKeyV6 { addr }), 1, 0)?;
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV4, u8> = ebpf
+            .map_mut("GEOIP_ALLOWED_V4")
+            .context("GEOIP_ALLOWED_V4 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in &new_allows_v4 {
+            map.insert(
+                &LpmKey::new(prefix, GeoIpKeyV4 { addr: addr.to_be() }),
+                1,
+                0,
+            )?;
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV6, u8> = ebpf
+            .map_mut("GEOIP_ALLOWED_V6")
+            .context("GEOIP_ALLOWED_V6 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in &new_allows_v6 {
+            map.insert(&LpmKey::new(prefix, GeoIpKeyV6 { addr }), 1, 0)?;
+        }
+    }
+
+    // 旧条目在新规则写入后再清理：顺序反过来会在 reload 期间出现
+    // "allow 列表为空 + default_action=drop" 的窗口，把管理连接一起切断。
+    let keep_blocks_v4: HashSet<(u32, u32)> = new_blocks_v4.iter().copied().collect();
+    let keep_blocks_v6: HashSet<([u8; 16], u32)> = new_blocks_v6.iter().copied().collect();
+    let keep_allows_v4: HashSet<(u32, u32)> = new_allows_v4.iter().copied().collect();
+    let keep_allows_v6: HashSet<([u8; 16], u32)> = new_allows_v6.iter().copied().collect();
+    let stale_blocks_v4: Vec<(u32, u32)> = old_blocks_v4
+        .iter()
+        .copied()
+        .filter(|k| !keep_blocks_v4.contains(k))
+        .collect();
+    let stale_blocks_v6: Vec<([u8; 16], u32)> = old_blocks_v6
+        .iter()
+        .copied()
+        .filter(|k| !keep_blocks_v6.contains(k))
+        .collect();
+    let stale_allows_v4: Vec<(u32, u32)> = old_allows_v4
+        .iter()
+        .copied()
+        .filter(|k| !keep_allows_v4.contains(k))
+        .collect();
+    let stale_allows_v6: Vec<([u8; 16], u32)> = old_allows_v6
+        .iter()
+        .copied()
+        .filter(|k| !keep_allows_v6.contains(k))
+        .collect();
+    remove_geoip_entries(
+        ebpf,
+        &stale_blocks_v4,
+        &stale_blocks_v6,
+        &stale_allows_v4,
+        &stale_allows_v6,
+    )?;
+
+    // 容量预警：LPM Trie 上限 4096 条/族，接近上限时提醒用户收敛网段粒度。
+    let v4_used = new_blocks_v4.len() + new_allows_v4.len();
+    let v6_used = new_blocks_v6.len() + new_allows_v6.len();
+    if v4_used > 3276 {
+        warn!(
+            "GeoIP IPv4 LPM tries are {}/4096 (>=80%), consider aggregating CIDRs to avoid insert failures",
+            v4_used
+        );
+    }
+    if v6_used > 3276 {
+        warn!(
+            "GeoIP IPv6 LPM tries are {}/4096 (>=80%), consider aggregating CIDRs to avoid insert failures",
+            v6_used
+        );
+    }
+
+    Ok(())
+}
+
+/// 从 4 张 GeoIP LPM Trie 中删除指定条目（幂等：条目不存在时忽略）。
+fn remove_geoip_entries(
+    ebpf: &mut Ebpf,
+    blocks_v4: &[(u32, u32)],
+    blocks_v6: &[([u8; 16], u32)],
+    allows_v4: &[(u32, u32)],
+    allows_v6: &[([u8; 16], u32)],
+) -> anyhow::Result<()> {
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV4, u8> = ebpf
+            .map_mut("GEOIP_BLOCKED_V4")
+            .context("GEOIP_BLOCKED_V4 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in blocks_v4 {
+            let _ = map.remove(&LpmKey::new(prefix, GeoIpKeyV4 { addr: addr.to_be() }));
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV6, u8> = ebpf
+            .map_mut("GEOIP_BLOCKED_V6")
+            .context("GEOIP_BLOCKED_V6 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in blocks_v6 {
+            let _ = map.remove(&LpmKey::new(prefix, GeoIpKeyV6 { addr }));
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV4, u8> = ebpf
+            .map_mut("GEOIP_ALLOWED_V4")
+            .context("GEOIP_ALLOWED_V4 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in allows_v4 {
+            let _ = map.remove(&LpmKey::new(prefix, GeoIpKeyV4 { addr: addr.to_be() }));
+        }
+    }
+    {
+        let mut map: LpmTrie<_, GeoIpKeyV6, u8> = ebpf
+            .map_mut("GEOIP_ALLOWED_V6")
+            .context("GEOIP_ALLOWED_V6 map not found")?
+            .try_into()?;
+        for &(addr, prefix) in allows_v6 {
+            let _ = map.remove(&LpmKey::new(prefix, GeoIpKeyV6 { addr }));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ip::parse_ip;
+    use xuanarmor_common::IpFamily;
+
+    #[test]
+    fn test_parse_ip_ipv4_ok() {
+        let key = parse_ip("192.0.2.1").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv4 as u8);
+        assert_eq!(key.ipv4(), 0xc000_0201);
+    }
+
+    #[test]
+    fn test_parse_ip_ipv6_ok() {
+        let key = parse_ip("::1").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv6 as u8);
+    }
+
+    #[test]
+    fn test_parse_cidr_ok() {
+        let (key, prefix) = parse_cidr("10.0.0.0/8").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv4 as u8);
+        assert_eq!(key.ipv4(), 0x0a00_0000);
+        assert_eq!(prefix, 8);
+    }
+
+    #[test]
+    fn test_parse_cidr_ipv6_ok() {
+        let (key, prefix) = parse_cidr("2001:db8::/32").unwrap();
+        assert_eq!(key.family, IpFamily::Ipv6 as u8);
+        assert_eq!(prefix, 32);
+    }
+
+    #[test]
+    fn test_parse_cidr_invalid_prefix_rejected() {
+        assert!(parse_cidr("192.0.2.0/33").is_err());
+        assert!(parse_cidr("2001:db8::/129").is_err());
+    }
+
+    #[test]
+    fn test_runtime_snapshot_from_config_preserves_trust_divisors() {
+        let mut config = Config {
+            interface: "lo".to_string(),
+            ..Config::default()
+        };
+        config.rate_limit.enabled = true;
+        config.rate_limit.threshold = 100;
+        config.trust_score.add_divisor = 50;
+        config.trust_score.sub_divisor = 2;
+        config.geoip.default_action = "drop".to_string();
+
+        let snapshot = RuntimeConfigSnapshot::from_config(&config);
+        assert_eq!(snapshot.trust_add_divisor, 50);
+        assert_eq!(snapshot.trust_sub_divisor, 2);
+        assert_eq!(snapshot.geoip_default_action, 1);
+        assert!(snapshot.rate_limit_enabled);
+        assert_eq!(snapshot.rate_limit.threshold, 100);
+    }
+}

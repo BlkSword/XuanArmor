@@ -20,7 +20,7 @@ NO_START=0
 FORCE_NO_SYSTEMD=0
 PURGE=0
 ROLLBACK_DIR=""
-EXPECTED_SHA="${ESHIELD_EXPECTED_SHA:-}"
+EXPECTED_SHA="${XUANARMOR_EXPECTED_SHA:-${ESHIELD_EXPECTED_SHA:-}}"
 _argv=("$@")
 for ((i = 0; i < ${#_argv[@]}; i++)); do
     case "${_argv[i]}" in
@@ -43,14 +43,14 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
   --version <x.y.z>     指定安装版本（默认取 GitHub 最新 Release）
   --no-start            安装/升级后不启动服务（便于先改配置）
   --no-systemd          不注册/不启动 systemd 服务（容器或手工管理场景）
-  --sha256 <hex>        校验下载产物 SHA256（也可用 ESHIELD_EXPECTED_SHA）
+  --sha256 <hex>        校验下载产物 SHA256（也可用 XUANARMOR_EXPECTED_SHA）
   --rollback [dir]      回滚到备份目录（省略则使用最近一次备份）
   --uninstall           卸载（保留配置与数据）
-  --purge               配合 --uninstall：同时删除 /etc/eshield 与持久化数据
+  --purge               配合 --uninstall：同时删除 /etc/xuanarmor 与持久化数据
   -h, --help            显示本帮助
 
 升级时脚本会自动把当前二进制/配置/service 备份到
-/var/lib/eshield/backup/<时间戳>/，可用 --rollback 回退。
+/var/lib/xuanarmor/backup/<时间戳>/，可用 --rollback 回退。
 
 一键安装（管道方式）:
   curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
@@ -62,15 +62,15 @@ USAGE
     esac
 done
 
-# GitHub 仓库（与 scripts/publish-release.sh 保持一致；可用 ESHIELD_REPO 覆盖）
-REPO="${ESHIELD_REPO:-BlkSword/XuanArmor}"
-# 优先从环境变量读取版本；未设置时依次尝试 workspace / eshield crate 的 Cargo.toml；最后回退到默认版本。
-DEFAULT_VERSION="0.5.1"
+# GitHub 仓库（与 scripts/publish-release.sh 保持一致；可用 XUANARMOR_REPO 覆盖）
+REPO="${XUANARMOR_REPO:-${ESHIELD_REPO:-BlkSword/XuanArmor}}"
+# 优先从环境变量读取版本；未设置时依次尝试 workspace / xuanarmor crate 的 Cargo.toml；最后回退到默认版本。
+DEFAULT_VERSION="0.6.0"
 if [ -z "${VERSION:-}" ]; then
     if [ -f "Cargo.toml" ] && grep -qE '^\[workspace\]' Cargo.toml 2>/dev/null; then
-        # workspace 根 Cargo.toml 不含 version，版本在 eshield/Cargo.toml
-        if [ -f "eshield/Cargo.toml" ]; then
-            VERSION=$(grep -m1 -E '^version\s*=' eshield/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+        # workspace 根 Cargo.toml 不含 version，版本在 xuanarmor/Cargo.toml
+        if [ -f "xuanarmor/Cargo.toml" ]; then
+            VERSION=$(grep -m1 -E '^version\s*=' xuanarmor/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
         fi
     elif [ -f "Cargo.toml" ]; then
         VERSION=$(grep -m1 -E '^version\s*=' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
@@ -84,18 +84,18 @@ lookup_latest_release() {
     curl -fsSL --max-time 8 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -1
 }
-if [ -z "${VERSION_EXPLICIT:-}" ] && [ ! -f "Cargo.toml" ] && [ ! -f "eshield/Cargo.toml" ]; then
+if [ -z "${VERSION_EXPLICIT:-}" ] && [ ! -f "Cargo.toml" ] && [ ! -f "xuanarmor/Cargo.toml" ]; then
     LATEST_VERSION="$(lookup_latest_release || true)"
     if [ -n "${LATEST_VERSION}" ]; then
         VERSION="${LATEST_VERSION}"
     fi
 fi
 # 安装路径可用环境变量覆盖（便于无副作用地验证安装脚本本身）
-INSTALL_BIN="${ESHIELD_INSTALL_BIN:-/usr/local/bin/eshield}"
-INSTALL_CFG="${ESHIELD_INSTALL_CFG:-/etc/eshield/config.toml}"
-STORE_PATH="${ESHIELD_STORE_PATH:-/var/lib/eshield/rules.redb}"
-SERVICE_FILE="${ESHIELD_SERVICE_FILE:-/etc/systemd/system/eshield.service}"
-SKIP_SYSTEMD="${ESHIELD_INSTALL_SKIP_SYSTEMD:-0}"
+INSTALL_BIN="${XUANARMOR_INSTALL_BIN:-${ESHIELD_INSTALL_BIN:-/usr/local/bin/xuanarmor}}"
+INSTALL_CFG="${XUANARMOR_INSTALL_CFG:-${ESHIELD_INSTALL_CFG:-/etc/xuanarmor/config.toml}}"
+STORE_PATH="${XUANARMOR_STORE_PATH:-${ESHIELD_STORE_PATH:-/var/lib/xuanarmor/rules.redb}}"
+SERVICE_FILE="${XUANARMOR_SERVICE_FILE:-${ESHIELD_SERVICE_FILE:-/etc/systemd/system/xuanarmor.service}}"
+SKIP_SYSTEMD="${XUANARMOR_INSTALL_SKIP_SYSTEMD:-${ESHIELD_INSTALL_SKIP_SYSTEMD:-0}}"
 WEB_PORT=8720
 
 # ── 环境检测 ──
@@ -192,7 +192,7 @@ if ss -tlnp 2>/dev/null | grep -q ":$WEB_PORT "; then
     warn "端口 $WEB_PORT 已被占用:"
     ss -tlnp 2>/dev/null | grep ":$WEB_PORT " | head -3
     warn "  安装将继续，但 XuanArmor 可能无法绑定该端口"
-    warn "  可在 /etc/eshield/config.toml 中修改 web_bind"
+    warn "  可在 /etc/xuanarmor/config.toml 中修改 web_bind"
 else
     info "端口 $WEB_PORT: 可用"
 fi
@@ -237,12 +237,12 @@ build_local() {
         echo "错误: 未检测到 rustup，请先安装 Rust"
         exit 1
     fi
-    rustup toolchain install "${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
-    rustup target add bpfel-unknown-none --toolchain "${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
-    rustup component add rust-src --toolchain "${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
-    cargo +"${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
-    cargo build --package eshield --target "$TARGET" --release
-    NEW_BIN="target/$TARGET/release/eshield"
+    rustup toolchain install "${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
+    rustup target add bpfel-unknown-none --toolchain "${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
+    rustup component add rust-src --toolchain "${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
+    cargo +"${XUANARMOR_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package xuanarmor-ebpf --target bpfel-unknown-none -Z build-std=core --release
+    cargo build --package xuanarmor --target "$TARGET" --release
+    NEW_BIN="target/$TARGET/release/xuanarmor"
     if smooth_upgrade "$NEW_BIN"; then
         info "平滑升级完成（旧进程退出期间 XDP 继续挂载）"
         exit 0
@@ -250,7 +250,7 @@ build_local() {
     install -m 0755 "$NEW_BIN" "$INSTALL_BIN"
 }
 
-BACKUP_ROOT="${ESHIELD_BACKUP_DIR:-/var/lib/eshield/backup}"
+BACKUP_ROOT="${XUANARMOR_BACKUP_DIR:-${ESHIELD_BACKUP_DIR:-/var/lib/xuanarmor/backup}}"
 
 # 备份当前安装（升级/回滚用）：二进制 + 配置 + systemd 单元 + 版本号
 backup_current() {
@@ -258,9 +258,9 @@ backup_current() {
     ts="$(date +%Y%m%d-%H%M%S)"
     dir="${BACKUP_ROOT}/${ts}"
     mkdir -p "$dir" || return 0
-    [ -f "$INSTALL_BIN" ] && cp -a "$INSTALL_BIN" "$dir/eshield" 2>/dev/null || true
+    [ -f "$INSTALL_BIN" ] && cp -a "$INSTALL_BIN" "$dir/xuanarmor" 2>/dev/null || true
     [ -f "$INSTALL_CFG" ] && cp -a "$INSTALL_CFG" "$dir/config.toml" 2>/dev/null || true
-    [ -f "$SERVICE_FILE" ] && cp -a "$SERVICE_FILE" "$dir/eshield.service" 2>/dev/null || true
+    [ -f "$SERVICE_FILE" ] && cp -a "$SERVICE_FILE" "$dir/xuanarmor.service" 2>/dev/null || true
     echo "${VERSION}" > "$dir/VERSION" 2>/dev/null || true
     # 最多保留 5 个备份，避免 /var/lib 无限增长
     ls -1dt "${BACKUP_ROOT}"/*/ 2>/dev/null | tail -n +6 | xargs -r rm -rf
@@ -270,18 +270,18 @@ backup_current() {
 do_uninstall() {
     echo "── 卸载 XuanArmor ──"
     if [ "$SKIP_SYSTEMD" != "1" ]; then
-        systemctl stop eshield 2>/dev/null || true
-        systemctl disable eshield 2>/dev/null || true
+        systemctl stop xuanarmor 2>/dev/null || true
+        systemctl disable xuanarmor 2>/dev/null || true
         rm -f "$SERVICE_FILE"
-        systemctl disable --now 'run-eshield\x2dbpf.mount' 2>/dev/null || true
-        rm -f '/etc/systemd/system/run-eshield\x2dbpf.mount'
+        systemctl disable --now 'run-xuanarmor\x2dbpf.mount' 2>/dev/null || true
+        rm -f '/etc/systemd/system/run-xuanarmor\x2dbpf.mount'
         systemctl daemon-reload 2>/dev/null || true
     fi
     rm -f "$INSTALL_BIN"
     info "已移除二进制与服务单元（配置与数据默认保留）"
     if [ "$PURGE" = "1" ]; then
-        rm -rf /etc/eshield "$(dirname "$STORE_PATH")" /var/log/eshield
-        info "已删除配置目录 /etc/eshield、数据目录 $(dirname "$STORE_PATH")、日志目录 /var/log/eshield"
+        rm -rf /etc/xuanarmor "$(dirname "$STORE_PATH")" /var/log/xuanarmor
+        info "已删除配置目录 /etc/xuanarmor、数据目录 $(dirname "$STORE_PATH")、日志目录 /var/log/xuanarmor"
     else
         warn "配置保留在 ${INSTALL_CFG}；如需彻底删除请加 --purge"
     fi
@@ -298,23 +298,23 @@ do_rollback() {
         exit 1
     fi
     echo "── 回滚到备份：${dir} ──"
-    [ -f "$dir/eshield" ] || { err "备份中缺少二进制"; exit 1; }
+    [ -f "$dir/xuanarmor" ] || { err "备份中缺少二进制"; exit 1; }
     if [ "$SKIP_SYSTEMD" != "1" ]; then
-        systemctl stop eshield 2>/dev/null || true
+        systemctl stop xuanarmor 2>/dev/null || true
     fi
-    install -m 0755 "$dir/eshield" "$INSTALL_BIN"
+    install -m 0755 "$dir/xuanarmor" "$INSTALL_BIN"
     [ -f "$dir/config.toml" ] && install -m 0644 "$dir/config.toml" "$INSTALL_CFG"
-    [ -f "$dir/eshield.service" ] && install -m 0644 "$dir/eshield.service" "$SERVICE_FILE"
+    [ -f "$dir/xuanarmor.service" ] && install -m 0644 "$dir/xuanarmor.service" "$SERVICE_FILE"
     if [ "$SKIP_SYSTEMD" != "1" ]; then
         systemctl daemon-reload
-        systemctl start eshield
+        systemctl start xuanarmor
     fi
     info "回滚完成：$([ -f "$dir/VERSION" ] && cat "$dir/VERSION" || echo unknown)"
 }
 
 download_release() {
-    URL="https://github.com/${REPO}/releases/download/v${VERSION}/eshield-${TARGET}"
-    TMP_BIN="$(mktemp /tmp/eshield-download.XXXXXX)"
+    URL="https://github.com/${REPO}/releases/download/v${VERSION}/xuanarmor-${TARGET}"
+    TMP_BIN="$(mktemp /tmp/xuanarmor-download.XXXXXX)"
     echo "下载 XuanArmor v${VERSION} (${TARGET})..."
     echo "  $URL"
     # -f：HTTP 错误直接失败（否则 404 的 HTML 会被当成二进制装进 /usr/local/bin）
@@ -333,16 +333,16 @@ download_release() {
 
     # 若 release 提供了 SHA256SUMS 则校验；缺失时给出明确警告而不是静默安装。
     SUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/SHA256SUMS"
-    if curl -fsSL --retry 2 "$SUMS_URL" -o /tmp/eshield-SHA256SUMS 2>/dev/null; then
-        EXPECTED=$(awk -v f="eshield-${TARGET}" '$2 == f || $2 == "*"f {print $1; exit}' /tmp/eshield-SHA256SUMS)
+    if curl -fsSL --retry 2 "$SUMS_URL" -o /tmp/xuanarmor-SHA256SUMS 2>/dev/null; then
+        EXPECTED=$(awk -v f="xuanarmor-${TARGET}" '$2 == f || $2 == "*"f {print $1; exit}' /tmp/xuanarmor-SHA256SUMS)
         ACTUAL=$(sha256sum "$TMP_BIN" | awk '{print $1}')
         if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
-            rm -f "$TMP_BIN" /tmp/eshield-SHA256SUMS
+            rm -f "$TMP_BIN" /tmp/xuanarmor-SHA256SUMS
             err "SHA256 校验失败（期望 $EXPECTED，实际 $ACTUAL），已中止安装"
             exit 1
         fi
         [ -n "$EXPECTED" ] && info "SHA256 校验通过"
-        rm -f /tmp/eshield-SHA256SUMS
+        rm -f /tmp/xuanarmor-SHA256SUMS
     else
         warn "未找到 SHA256SUMS，跳过二进制校验（建议核对下载来源）"
     fi
@@ -383,7 +383,7 @@ smooth_upgrade() {
         --config "$INSTALL_CFG" \
         --install-bin "$INSTALL_BIN" \
         --backup-dir "$BACKUP_ROOT" \
-        --timeout "${ESHIELD_UPGRADE_TIMEOUT:-30}"
+        --timeout "${XUANARMOR_UPGRADE_TIMEOUT:-30}"
 }
 
 if [ "$ACTION" = "uninstall" ]; then
@@ -395,13 +395,62 @@ if [ "$ACTION" = "rollback" ]; then
     exit 0
 fi
 
+# 迁移 v0.5.x 旧命名安装（eshield -> xuanarmor）：
+# 停止旧服务、备份旧二进制/配置、复制并改写配置与数据到新路径，并保留兼容软链。
+migrate_legacy() {
+    local old_bin="/usr/local/bin/eshield"
+    local old_cfg="/etc/eshield/config.toml"
+    local old_store="/var/lib/eshield"
+    local old_log="/var/log/eshield"
+    local old_unit="/etc/systemd/system/eshield.service"
+    [ -e "$old_bin" ] || [ -e "$old_cfg" ] || [ -e "$old_unit" ] || return 0
+
+    warn "检测到旧版 eshield 安装，开始迁移到 xuanarmor"
+    if [ "$SKIP_SYSTEMD" != "1" ]; then
+        systemctl stop eshield 2>/dev/null || true
+        systemctl disable eshield 2>/dev/null || true
+    fi
+    mkdir -p "${BACKUP_ROOT}/legacy-$(date +%Y%m%d-%H%M%S)"
+    local bdir
+    bdir="$(ls -1dt "${BACKUP_ROOT}"/legacy-* 2>/dev/null | head -1)"
+    [ -e "$old_bin" ] && cp -a "$old_bin" "$bdir/eshield" 2>/dev/null || true
+    [ -e "$old_cfg" ] && cp -a "$old_cfg" "$bdir/config.toml" 2>/dev/null || true
+    [ -e "$old_unit" ] && cp -a "$old_unit" "$bdir/eshield.service" 2>/dev/null || true
+
+    mkdir -p /etc/xuanarmor
+    if [ -f "$old_cfg" ] && [ ! -f "$INSTALL_CFG" ]; then
+        sed -e 's#/etc/eshield#/etc/xuanarmor#g' \
+            -e 's#/var/lib/eshield#/var/lib/xuanarmor#g' \
+            -e 's#/var/log/eshield#/var/log/xuanarmor#g' \
+            "$old_cfg" > "$INSTALL_CFG"
+        info "已迁移配置: $old_cfg -> $INSTALL_CFG"
+    fi
+    if [ -d "$old_store" ] && [ ! -d /var/lib/xuanarmor ]; then
+        cp -a "$old_store" /var/lib/xuanarmor
+        info "已迁移数据目录: $old_store -> /var/lib/xuanarmor"
+    fi
+    if [ -d "$old_log" ] && [ ! -d /var/log/xuanarmor ]; then
+        cp -a "$old_log" /var/log/xuanarmor 2>/dev/null || true
+    fi
+    [ -f "$old_unit" ] && rm -f "$old_unit"
+    [ "$SKIP_SYSTEMD" != "1" ] && systemctl daemon-reload 2>/dev/null || true
+    # 旧命令名兼容软链（保留一个版本周期，便于既有脚本过渡）
+    if [ -e "$old_bin" ] && [ ! -e /usr/local/bin/eshield.compat ]; then
+        rm -f "$old_bin"
+        ln -sf /usr/local/bin/xuanarmor /usr/local/bin/eshield 2>/dev/null || true
+    fi
+    info "旧安装迁移完成（旧二进制/配置备份在 $bdir）"
+}
+
+migrate_legacy
+
 # 升级前：停止旧服务并备份（避免覆盖正在运行的二进制）
 if [ -f "$INSTALL_BIN" ]; then
     UPGRADING=1
     BACKUP_DIR="$(backup_current)"
     info "检测到已安装版本，已备份到：${BACKUP_DIR}"
-    if [ "$SKIP_SYSTEMD" != "1" ] && systemctl is-active --quiet eshield 2>/dev/null; then
-        systemctl stop eshield
+    if [ "$SKIP_SYSTEMD" != "1" ] && systemctl is-active --quiet xuanarmor 2>/dev/null; then
+        systemctl stop xuanarmor
         info "已停止旧版本服务，准备升级"
     fi
 fi
@@ -412,26 +461,26 @@ else
     download_release
 fi
 
-mkdir -p /etc/eshield
+mkdir -p /etc/xuanarmor
 mkdir -p "$(dirname "$STORE_PATH")"
 # systemd 单元会以 ReadWritePaths/StateDirectory/LogsDirectory 引用这些目录；
 # 目录不存在会导致服务启动失败（status=226/NAMESPACE），必须先创建。
-mkdir -p /var/lib/eshield /var/log/eshield
-chmod 755 /var/lib/eshield /var/log/eshield 2>/dev/null || true
+mkdir -p /var/lib/xuanarmor /var/log/xuanarmor
+chmod 755 /var/lib/xuanarmor /var/log/xuanarmor 2>/dev/null || true
 
 # XDP link 需要 pin 到 bpffs 才能在重启/升级期间保持挂载；
 # 精简镜像/容器里 /sys/fs/bpf 常常没有挂载，这里准备独立 bpffs 挂载。
 if [ "$SKIP_SYSTEMD" != "1" ]; then
-    mkdir -p /run/eshield-bpf
-    if ! mountpoint -q /run/eshield-bpf; then
+    mkdir -p /run/xuanarmor-bpf
+    if ! mountpoint -q /run/xuanarmor-bpf; then
         # 注意：mount 单元名必须与挂载点对应，路径中的 '-' 需转义为 \x2d
-        cat > '/etc/systemd/system/run-eshield\x2dbpf.mount' <<'MOUNTUNIT'
+        cat > '/etc/systemd/system/run-xuanarmor\x2dbpf.mount' <<'MOUNTUNIT'
 [Unit]
 Description=bpffs for XuanArmor XDP link pinning
 
 [Mount]
 What=bpf
-Where=/run/eshield-bpf
+Where=/run/xuanarmor-bpf
 Type=bpf
 Options=mode=700
 
@@ -439,8 +488,8 @@ Options=mode=700
 WantedBy=multi-user.target
 MOUNTUNIT
         systemctl daemon-reload
-        systemctl enable --now 'run-eshield\x2dbpf.mount' >/dev/null 2>&1 || warn "bpffs 挂载单元启用失败，XDP link 可能无法持久化"
-        info "已准备 bpffs: /run/eshield-bpf"
+        systemctl enable --now 'run-xuanarmor\x2dbpf.mount' >/dev/null 2>&1 || warn "bpffs 挂载单元启用失败，XDP link 可能无法持久化"
+        info "已准备 bpffs: /run/xuanarmor-bpf"
     fi
 fi
 
@@ -462,13 +511,13 @@ web_bind = "0.0.0.0:8720"
 # 本机 127.0.0.1/::1 免校验（供 CLI/TUI 使用）。
 # api_token = "changeme"
 
-store_path = "/var/lib/eshield/rules.redb"
+store_path = "/var/lib/xuanarmor/rules.redb"
 
 # 只读 Token（可选，v0.5.0）：仅允许 GET/HEAD，适合监控系统 / 只读大屏
 # readonly_token = "readonly-changeme"
 
 # 告警 Webhook（可选）
-# alert_webhook_url = "https://hooks.example.com/eshield"
+# alert_webhook_url = "https://hooks.example.com/xuanarmor"
 alert_webhook_type = "generic"
 alert_threshold_dps = 1000
 alert_cooldown_s = 60
@@ -482,8 +531,8 @@ mode = "auto"
 fragment_policy = "rate_limit"
 # 平滑升级（v0.5.1）：退出时保留 XDP 挂载（fail-closed），升级/重启期间防护不中断
 persist_link = true
-# pinned link 所在 bpffs；安装脚本会创建并挂载 /run/eshield-bpf
-pin_path = "/run/eshield-bpf"
+# pinned link 所在 bpffs；安装脚本会创建并挂载 /run/xuanarmor-bpf
+pin_path = "/run/xuanarmor-bpf"
 
 [rate_limit]
 enabled = true
@@ -521,7 +570,7 @@ block_duration_s = 300
 
 [geoip]
 enabled = false
-country_blocks_csv = "/etc/eshield/geoip_country.csv"
+country_blocks_csv = "/etc/xuanarmor/geoip_country.csv"
 block_countries = ["XX"]
 default_action = "pass"
 
@@ -535,9 +584,9 @@ EOF
     echo "已创建默认配置文件: $INSTALL_CFG"
 fi
 
-if [ -f "packaging/eshield.service" ]; then
-    install -m 0644 "packaging/eshield.service" "$SERVICE_FILE"
-elif curl -fsSL --max-time 10 "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/eshield.service" -o "$SERVICE_FILE" 2>/dev/null; then
+if [ -f "packaging/xuanarmor.service" ]; then
+    install -m 0644 "packaging/xuanarmor.service" "$SERVICE_FILE"
+elif curl -fsSL --max-time 10 "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/xuanarmor.service" -o "$SERVICE_FILE" 2>/dev/null; then
     chmod 644 "$SERVICE_FILE"
 else
     warn "未能下载 systemd 单元，使用脚本内置默认单元"
@@ -550,15 +599,15 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/eshield start --config /etc/eshield/config.toml
+ExecStart=/usr/local/bin/xuanarmor start --config /etc/xuanarmor/config.toml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
 LimitMEMLOCK=infinity
-StateDirectory=eshield
-LogsDirectory=eshield
-ReadWritePaths=/var/lib/eshield /var/log/eshield /sys/fs/bpf /run/eshield-bpf
+StateDirectory=xuanarmor
+LogsDirectory=xuanarmor
+ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf
 CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 NoNewPrivileges=true
@@ -570,22 +619,22 @@ UNIT
 fi
 
 if [ "$SKIP_SYSTEMD" = "1" ]; then
-    warn "ESHIELD_INSTALL_SKIP_SYSTEMD=1，跳过 systemd 注册（用于安装脚本自测）"
+    warn "XUANARMOR_INSTALL_SKIP_SYSTEMD=1，跳过 systemd 注册（用于安装脚本自测）"
 else
     systemctl daemon-reload
-    systemctl enable eshield
+    systemctl enable xuanarmor
 
     if [ "$NO_START" = "1" ]; then
-        warn "已按 --no-start 跳过服务启动（修改配置后执行: sudo systemctl start eshield）"
+        warn "已按 --no-start 跳过服务启动（修改配置后执行: sudo systemctl start xuanarmor）"
     # 升级场景必须 restart（reload 只热加载配置，不会替换正在运行的二进制）
-    elif systemctl is-active --quiet eshield; then
+    elif systemctl is-active --quiet xuanarmor; then
         if [ "${UPGRADING:-0}" = "1" ]; then
-            systemctl restart eshield
+            systemctl restart xuanarmor
         else
-            systemctl reload eshield
+            systemctl reload xuanarmor
         fi
     else
-        systemctl start eshield
+        systemctl start xuanarmor
     fi
 
     # 安装后健康检查：/ready 同时反映 XDP 是否真正挂载
@@ -600,7 +649,7 @@ else
             info "服务健康检查通过（/ready=200，XDP 已挂载）"
         else
             warn "服务未在 30 秒内就绪，请检查配置与日志："
-            warn "  sudo journalctl -u eshield -n 50 --no-pager"
+            warn "  sudo journalctl -u xuanarmor -n 50 --no-pager"
             warn "  常见原因：网卡名不存在 / 端口被占用 / XDP 模式与驱动不兼容"
         fi
     fi
@@ -617,18 +666,18 @@ echo "  二进制路径:  ${INSTALL_BIN}"
 echo "  持久化存储:  ${STORE_PATH}"
 echo ""
 echo "  管理命令:"
-echo "    sudo systemctl status eshield     # 查看状态"
-echo "    sudo systemctl stop eshield       # 停止服务"
-echo "    sudo systemctl restart eshield    # 重启服务"
-echo "    sudo systemctl reload eshield     # 热加载配置 (SIGHUP)"
-echo "    sudo journalctl -u eshield -f     # 实时日志"
+echo "    sudo systemctl status xuanarmor     # 查看状态"
+echo "    sudo systemctl stop xuanarmor       # 停止服务"
+echo "    sudo systemctl restart xuanarmor    # 重启服务"
+echo "    sudo systemctl reload xuanarmor     # 热加载配置 (SIGHUP)"
+echo "    sudo journalctl -u xuanarmor -f     # 实时日志"
 echo ""
 echo "  CLI 命令（本机免认证）:"
-echo "    eshield status                    # 查看运行状态"
-echo "    eshield block <IP> -d <秒>        # 封禁 IP"
-echo "    eshield unblock <IP>              # 解封 IP"
-echo "    eshield reload                    # 重载配置"
-echo "    eshield tui                       # TUI 仪表盘"
+echo "    xuanarmor status                    # 查看运行状态"
+echo "    xuanarmor block <IP> -d <秒>        # 封禁 IP"
+echo "    xuanarmor unblock <IP>              # 解封 IP"
+echo "    xuanarmor reload                    # 重载配置"
+echo "    xuanarmor tui                       # TUI 仪表盘"
 echo ""
 if [ "$DEFAULT_IFACE" != "eth0" ]; then
     echo -e "  ${YELLOW}注意: 网卡已自动设置为 ${DEFAULT_IFACE}，如需修改请编辑 ${INSTALL_CFG}${NC}"
