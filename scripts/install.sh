@@ -29,11 +29,11 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
         --no-systemd) FORCE_NO_SYSTEMD=1 ;;
         --uninstall) ACTION="uninstall" ;;
         --purge) PURGE=1 ;;
-        --version) VERSION="${_argv[i + 1]:-}"; VERSION_EXPLICIT=1; ((i++)) ;;
+        --version) VERSION="${_argv[i + 1]:-}"; VERSION_EXPLICIT=1; i=$((i + 1)) ;;
         --version=*) VERSION="${_argv[i]#*=}"; VERSION_EXPLICIT=1 ;;
-        --sha256) EXPECTED_SHA="${_argv[i + 1]:-}"; ((i++)) ;;
+        --sha256) EXPECTED_SHA="${_argv[i + 1]:-}"; i=$((i + 1)) ;;
         --sha256=*) EXPECTED_SHA="${_argv[i]#*=}" ;;
-        --rollback) ACTION="rollback"; ROLLBACK_DIR="${_argv[i + 1]:-}"; ((i++)) ;;
+        --rollback) ACTION="rollback"; ROLLBACK_DIR="${_argv[i + 1]:-}"; i=$((i + 1)) ;;
         --rollback=*) ACTION="rollback"; ROLLBACK_DIR="${_argv[i]#*=}" ;;
         -h | --help)
             cat <<'USAGE'
