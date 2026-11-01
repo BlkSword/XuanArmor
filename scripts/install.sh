@@ -273,6 +273,8 @@ do_uninstall() {
         systemctl stop eshield 2>/dev/null || true
         systemctl disable eshield 2>/dev/null || true
         rm -f "$SERVICE_FILE"
+        systemctl disable --now run-eshield-bpf.mount 2>/dev/null || true
+        rm -f /etc/systemd/system/run-eshield-bpf.mount
         systemctl daemon-reload 2>/dev/null || true
     fi
     rm -f "$INSTALL_BIN"
@@ -416,6 +418,30 @@ mkdir -p "$(dirname "$STORE_PATH")"
 # 目录不存在会导致服务启动失败（status=226/NAMESPACE），必须先创建。
 mkdir -p /var/lib/eshield /var/log/eshield
 chmod 755 /var/lib/eshield /var/log/eshield 2>/dev/null || true
+
+# XDP link 需要 pin 到 bpffs 才能在重启/升级期间保持挂载；
+# 精简镜像/容器里 /sys/fs/bpf 常常没有挂载，这里准备独立 bpffs 挂载。
+if [ "$SKIP_SYSTEMD" != "1" ]; then
+    mkdir -p /run/eshield-bpf
+    if ! mountpoint -q /run/eshield-bpf; then
+        cat > /etc/systemd/system/run-eshield-bpf.mount <<'MOUNTUNIT'
+[Unit]
+Description=bpffs for XuanArmor XDP link pinning
+
+[Mount]
+What=bpf
+Where=/run/eshield-bpf
+Type=bpf
+Options=mode=700
+
+[Install]
+WantedBy=multi-user.target
+MOUNTUNIT
+        systemctl daemon-reload
+        systemctl enable --now run-eshield-bpf.mount >/dev/null 2>&1 || warn "bpffs 挂载单元启用失败，XDP link 可能无法持久化"
+        info "已准备 bpffs: /run/eshield-bpf"
+    fi
+fi
 
 if [ ! -f "$INSTALL_CFG" ]; then
     cat > "$INSTALL_CFG" <<'EOF'
