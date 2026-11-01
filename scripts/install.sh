@@ -412,6 +412,10 @@ fi
 
 mkdir -p /etc/eshield
 mkdir -p "$(dirname "$STORE_PATH")"
+# systemd 单元会以 ReadWritePaths/StateDirectory/LogsDirectory 引用这些目录；
+# 目录不存在会导致服务启动失败（status=226/NAMESPACE），必须先创建。
+mkdir -p /var/lib/eshield /var/log/eshield
+chmod 755 /var/lib/eshield /var/log/eshield 2>/dev/null || true
 
 if [ ! -f "$INSTALL_CFG" ]; then
     cat > "$INSTALL_CFG" <<'EOF'
@@ -524,6 +528,8 @@ Restart=on-failure
 RestartSec=3
 LimitNOFILE=1048576
 LimitMEMLOCK=infinity
+StateDirectory=eshield
+LogsDirectory=eshield
 CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 NoNewPrivileges=true

@@ -1,6 +1,6 @@
 [Unit]
-Description=eShield - eBPF/XDP host-level CC defense shield
-Documentation=https://github.com/eshield/eshield
+Description=XuanArmor - eBPF/XDP host-level L3-L4 DDoS shield
+Documentation=https://github.com/BlkSword/XuanArmor
 After=network-online.target
 Wants=network-online.target
 
@@ -18,6 +18,9 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/eshield /var/log/eshield
+# 自动创建数据/日志目录（systemd >= 235），避免 ReadWritePaths 指向不存在的路径
+StateDirectory=eshield
+LogsDirectory=eshield
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
