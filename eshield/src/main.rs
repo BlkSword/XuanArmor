@@ -1179,8 +1179,10 @@ async fn sync_trust_scores(ebpf: Arc<tokio::sync::Mutex<Ebpf>>, stats: Arc<crate
 /// 解析 `ip -j link show dev <iface>` 里的 XDP 挂载信息，返回 (程序名, mode 数值)。
 /// 返回 None 表示接口未挂 XDP 或 iproute2 不可用。
 fn probe_xdp(iface: &str) -> Option<(String, u32)> {
+    // 加 -d 获取程序详情；某些内核对 bpf_link 挂载只在 attached[] 里给出 prog 信息，
+    // 这里同时兼容两种 JSON 结构，避免把"已挂载"误判成"未挂载"而反复重挂。
     let out = std::process::Command::new("ip")
-        .args(["-j", "link", "show", "dev", iface])
+        .args(["-j", "-d", "link", "show", "dev", iface])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -1188,13 +1190,27 @@ fn probe_xdp(iface: &str) -> Option<(String, u32)> {
     }
     let value: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
     let xdp = value.get(0)?.get("xdp")?;
-    let name = xdp
-        .get("prog")
+
+    let prog = xdp.get("prog").or_else(|| {
+        xdp.get("attached")
+            .and_then(|a| a.get(0))
+            .and_then(|e| e.get("prog"))
+    });
+    let name = prog
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
         .unwrap_or("")
         .to_string();
-    let mode = xdp.get("mode").and_then(|m| m.as_u64()).unwrap_or(0) as u32;
+    let mode = xdp
+        .get("mode")
+        .or_else(|| {
+            xdp.get("attached")
+                .and_then(|a| a.get(0))
+                .and_then(|e| e.get("mode"))
+        })
+        .and_then(|m| m.as_u64())
+        .unwrap_or(0) as u32;
+    // 名字为空但确实存在 XDP 对象：按"已挂载但程序名未知"处理，宁可保持 ready 也不误报裸奔。
     Some((name, mode))
 }
 
@@ -1212,7 +1228,10 @@ async fn monitor_xdp(
         interval.tick().await;
 
         match probe_xdp(&iface) {
-            Some((name, mode)) if name == "eshield" => {
+            Some((name, mode)) if name == "eshield" || name.is_empty() => {
+                if name.is_empty() {
+                    tracing::debug!("XDP 程序名未知，但检测到挂载，按已挂载处理");
+                }
                 stats.xdp_attached.store(true, Ordering::Relaxed);
                 stats
                     .xdp_mode
@@ -1249,7 +1268,7 @@ async fn monitor_xdp(
     }
 }
 
-/// 判断 Web 监听地址是否仅绑定环回/// 判断 Web 监听地址是否仅绑定环回（环回上明文 HTTP 风险可接受）。
+/// 判断 Web 监听地址是否仅绑定环回（环回上明文 HTTP 风险可接受）。
 fn bind_is_loopback(bind: &str) -> bool {
     // 支持 "[::1]:8720"、"127.0.0.1:8720"、"localhost:8720" 以及无端口的裸 IPv6 "::1"
     let host = if let Some(rest) = bind.strip_prefix('[') {

@@ -530,6 +530,7 @@ LimitNOFILE=1048576
 LimitMEMLOCK=infinity
 StateDirectory=eshield
 LogsDirectory=eshield
+ReadWritePaths=/var/lib/eshield /var/log/eshield /sys/fs/bpf /run/eshield-bpf
 CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 NoNewPrivileges=true
