@@ -24,6 +24,29 @@ state, tabular numbers right-aligned — the whole protection posture fits on on
 
 Charts are hand-written SVG components (no ECharts); the console bundle is ~239KB (80KB gzipped).
 
+## Quick Start (One-Command Install)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+```
+
+- Installs the **latest release**, auto-detects the active NIC and writes `/etc/eshield/config.toml`.
+- Open `http://<server-ip>:8720` for the console (run `sudo eshield reset-token` for the first login token).
+- Verify: `curl -s http://127.0.0.1:8720/ready` returning `200` means the daemon is ready and XDP is attached.
+
+Variants:
+
+```bash
+# pin a version
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1
+# install without starting (edit config first)
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --no-start
+# build from source
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh --build
+```
+
+Requirements: Linux kernel >= 5.10 with BTF, root privileges; >= 512MB RAM recommended.
+
 ## Table of Contents
 
 - [1. Overview](#1-overview)

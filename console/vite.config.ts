@@ -1,11 +1,17 @@
 import { defineConfig } from 'vite'
+import { readFileSync } from 'node:fs'
 import vue from '@vitejs/plugin-vue'
 import { viteSingleFile } from 'vite-plugin-singlefile'
 
 // The console is shipped as a single self-contained HTML file so that the Rust
 // static-asset layer can embed it with a single include_bytes!. Dev mode still
 // serves normal modules.
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+  },
   base: './',
   plugins: [vue(), viteSingleFile({ removeViteModuleLoader: true })],
   // Dev mode: forward API calls to a locally running XuanArmor (8720).

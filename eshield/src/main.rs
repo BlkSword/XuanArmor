@@ -20,9 +20,9 @@ mod threat_intel;
 mod time;
 mod timeseries;
 mod tui;
+mod upgrade;
 mod web;
 mod xdp_link;
-mod upgrade;
 
 use anyhow::Context;
 use aya::{include_bytes_aligned, maps::HashMap as LruHashMap, programs::Xdp, Ebpf};

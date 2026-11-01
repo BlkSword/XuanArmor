@@ -29,7 +29,7 @@ pub enum XdpHandle {
     /// link 已 pin：跨进程存活，退出时不 detach。
     Pinned,
     /// 普通挂载（未 pin），只在当前进程存活。
-    Legacy(XdpLinkId),
+    Legacy { _link_id: XdpLinkId },
 }
 
 pub struct XdpState {
@@ -194,7 +194,7 @@ fn attach_with_mode(
     }
 }
 
-/// 尝试复用上次留下的 pinned link：`bpf_link_update` 原子替换为新程序。
+/// 复用上次留下的 pinned link：`bpf_link_update` 原子替换为新程序。
 fn try_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<Option<XdpState>> {
     let path = link_path(config);
     if !path.exists() {
@@ -220,13 +220,29 @@ fn try_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<Option<XdpState
         }
     }
 
-    let pinned = PinnedLink::from_pin(&path)
-        .map_err(|e| anyhow::anyhow!("打开 pinned link {}: {e}", path.display()))?;
-    let fd_link = pinned
-        .unpin()
-        .map_err(|e| anyhow::anyhow!("unpin {}: {e}", path.display()))?;
-    let xdp_link = XdpLink::try_from(fd_link)
-        .map_err(|e| anyhow::anyhow!("转换 pinned link 为 XDP link: {e}"))?;
+    let pinned = match PinnedLink::from_pin(&path) {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("打开 pinned link {} 失败（{e}）：重新挂载", path.display());
+            detach_pinned(config)?;
+            return Ok(None);
+        }
+    };
+    let fd_link = match pinned.unpin() {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("unpin {} 失败（{e}）：重新挂载", path.display());
+            detach_pinned(config)?;
+            return Ok(None);
+        }
+    };
+    let xdp_link = match XdpLink::try_from(fd_link) {
+        Ok(link) => link,
+        Err(e) => {
+            warn!("转换 pinned link 为 XDP link 失败（{e}）：重新挂载");
+            return Ok(None);
+        }
+    };
 
     let program: &mut Xdp = ebpf
         .program_mut(PROGRAM_NAME)
@@ -234,75 +250,67 @@ fn try_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<Option<XdpState
         .try_into()
         .map_err(|e| anyhow::anyhow!("program is not XDP: {e}"))?;
 
-    match program.attach_to_link(xdp_link) {
-        Ok(link_id) => {
-            let mode = match read_meta(config).map(|m| m.mode) {
-                Some(m) if m == "native" => "native",
-                _ => "generic",
-            };
-            match program.take_link(link_id) {
-                Ok(link) => match FdLink::try_from(link) {
-                    Ok(fd) => match fd.pin(&path) {
-                        Ok(pinned) => {
-                            drop(pinned);
-                            write_meta(config, mode).ok();
-                            info!(
-                                "复用 pinned XDP link 并原子替换程序（bpf_link_update），{} 上防护未中断",
-                                config.interface
-                            );
-                            return Ok(Some(XdpState {
-                                handle: XdpHandle::Pinned,
-                                mode,
-                                reused: true,
-                                replaced_existing: true,
-                            }));
-                        }
-                        Err(e) => {
-                            warn!("重新 pin XDP link 失败（{e}）：本次为普通挂载");
-                            let (id, mode) = attach_with_mode(program, config)?;
-                            return Ok(Some(XdpState {
-                                handle: XdpHandle::Legacy(id),
-                                mode,
-                                reused: false,
-                                replaced_existing: true,
-                            }));
-                        }
-                    },
-                    Err(e) => {
-                        warn!("pinned link 不是 BPF fd link（{e}）：本次为普通挂载");
-                        let (id, mode) = attach_with_mode(program, config)?;
-                        return Ok(Some(XdpState {
-                            handle: XdpHandle::Legacy(id),
-                            mode,
-                            reused: false,
-                            replaced_existing: true,
-                        }));
-                    }
-                },
-                Err(e) => {
-                    warn!("take_link 失败（{e}）：本次为普通挂载");
-                    let (id, mode) = attach_with_mode(program, config)?;
-                    return Ok(Some(XdpState {
-                        handle: XdpHandle::Legacy(id),
-                        mode,
-                        reused: false,
-                        replaced_existing: true,
-                    }));
-                }
-            }
-        }
+    let link_id = match program.attach_to_link(xdp_link) {
+        Ok(id) => id,
         Err(e) => {
             // link 已随错误路径释放，旧程序会在这时被摘除 → 立即重新挂载
             warn!("bpf_link_update 失败（{e}）：重新挂载（有短暂空窗）");
-            let (id, mode) = attach_with_mode(program, config)?;
+            return legacy_state(program, config, false);
+        }
+    };
+    let mode = match read_meta(config).map(|m| m.mode) {
+        Some(m) if m == "native" => "native",
+        _ => "generic",
+    };
+    let link = match program.take_link(link_id) {
+        Ok(link) => link,
+        Err(e) => {
+            warn!("take_link 失败（{e}）：本次为普通挂载");
+            return legacy_state(program, config, false);
+        }
+    };
+    let fd = match FdLink::try_from(link) {
+        Ok(fd) => fd,
+        Err(e) => {
+            warn!("pinned link 不是 BPF fd link（{e}）：本次为普通挂载");
+            return legacy_state(program, config, false);
+        }
+    };
+    match fd.pin(&path) {
+        Ok(pinned) => {
+            drop(pinned);
+            write_meta(config, mode).ok();
+            info!(
+                "复用 pinned XDP link 并原子替换程序（bpf_link_update），{} 上防护未中断",
+                config.interface
+            );
             Ok(Some(XdpState {
-                handle: XdpHandle::Legacy(id),
+                handle: XdpHandle::Pinned,
                 mode,
-                reused: false,
+                reused: true,
                 replaced_existing: true,
             }))
         }
+        Err(e) => {
+            warn!("重新 pin XDP link 失败（{e}）：本次为普通挂载");
+            legacy_state(program, config, false)
+        }
     }
+}
+
+/// 回退为普通挂载（link 未持久化）。
+fn legacy_state(
+    program: &mut Xdp,
+    config: &Config,
+    reused: bool,
+) -> anyhow::Result<Option<XdpState>> {
+    let (id, mode) = attach_with_mode(program, config)?;
+    Ok(Some(XdpState {
+        handle: XdpHandle::Legacy { _link_id: id },
+        mode,
+        reused,
+        replaced_existing: true,
+    }))
 }
 
 /// 启动时挂载：优先复用 pinned link 做原子替换，否则挂载并 pin。
@@ -326,7 +334,7 @@ pub fn attach_or_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<XdpSt
 
     if !config.xdp.persist_link {
         return Ok(XdpState {
-            handle: XdpHandle::Legacy(link_id),
+            handle: XdpHandle::Legacy { _link_id: link_id },
             mode,
             reused: false,
             replaced_existing,
@@ -336,14 +344,13 @@ pub fn attach_or_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<XdpSt
     let Some(pin_dir) = resolve_pin_dir(config) else {
         warn!("没有可用的 bpffs（pin_path 与 /run/eshield-bpf 均不可用）：本次为普通挂载");
         return Ok(XdpState {
-            handle: XdpHandle::Legacy(link_id),
+            handle: XdpHandle::Legacy { _link_id: link_id },
             mode,
             reused: false,
             replaced_existing,
         });
     };
     let path = pin_dir.join(LINK_FILE);
-
 
     // 清理陈旧 pin（例如上次运行留下的、对应旧网卡实例的 link），
     // 否则 fd.pin 会因 EEXIST 失败并把本次降级为普通挂载。
@@ -373,7 +380,7 @@ pub fn attach_or_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<XdpSt
                     );
                     let (id, mode) = attach_with_mode(program, config)?;
                     Ok(XdpState {
-                        handle: XdpHandle::Legacy(id),
+                        handle: XdpHandle::Legacy { _link_id: id },
                         mode,
                         reused: false,
                         replaced_existing,
@@ -384,7 +391,7 @@ pub fn attach_or_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<XdpSt
                 warn!("link 不是 BPF fd link（{e}）：本次为普通挂载");
                 let (id, mode) = attach_with_mode(program, config)?;
                 Ok(XdpState {
-                    handle: XdpHandle::Legacy(id),
+                    handle: XdpHandle::Legacy { _link_id: id },
                     mode,
                     reused: false,
                     replaced_existing,
@@ -395,7 +402,7 @@ pub fn attach_or_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<XdpSt
             warn!("take_link 失败（{e}）：本次为普通挂载");
             let (id, mode) = attach_with_mode(program, config)?;
             Ok(XdpState {
-                handle: XdpHandle::Legacy(id),
+                handle: XdpHandle::Legacy { _link_id: id },
                 mode,
                 reused: false,
                 replaced_existing,

@@ -161,6 +161,7 @@ pub struct WebState {
     pub map_infos: Arc<Vec<MapInfo>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     stats: Arc<Stats>,
     control: Arc<ControlState>,

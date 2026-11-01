@@ -1,8 +1,10 @@
 #!/bin/bash
 # XuanArmor 一键安装脚本
 # 用法:
-#   sudo bash scripts/install.sh           # 从 GitHub Release 下载二进制
+#   curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1
 #   sudo bash scripts/install.sh --build   # 从当前源码构建并安装
+#   sudo bash scripts/install.sh --no-start  # 只安装/升级，不启动服务
 set -e
 
 # ── 颜色输出 ──
@@ -14,6 +16,8 @@ err()   { echo -e "${RED}[FAIL]${NC} $1"; }
 # ── 参数解析（v0.5.0：安装 / 升级 / 回滚 / 卸载） ──
 ACTION="install"
 BUILD_MODE=0
+NO_START=0
+FORCE_NO_SYSTEMD=0
 PURGE=0
 ROLLBACK_DIR=""
 EXPECTED_SHA="${ESHIELD_EXPECTED_SHA:-}"
@@ -21,10 +25,12 @@ _argv=("$@")
 for ((i = 0; i < ${#_argv[@]}; i++)); do
     case "${_argv[i]}" in
         --build) BUILD_MODE=1 ;;
+        --no-start) NO_START=1 ;;
+        --no-systemd) FORCE_NO_SYSTEMD=1 ;;
         --uninstall) ACTION="uninstall" ;;
         --purge) PURGE=1 ;;
-        --version) VERSION="${_argv[i + 1]:-}"; ((i++)) ;;
-        --version=*) VERSION="${_argv[i]#*=}" ;;
+        --version) VERSION="${_argv[i + 1]:-}"; VERSION_EXPLICIT=1; ((i++)) ;;
+        --version=*) VERSION="${_argv[i]#*=}"; VERSION_EXPLICIT=1 ;;
         --sha256) EXPECTED_SHA="${_argv[i + 1]:-}"; ((i++)) ;;
         --sha256=*) EXPECTED_SHA="${_argv[i]#*=}" ;;
         --rollback) ACTION="rollback"; ROLLBACK_DIR="${_argv[i + 1]:-}"; ((i++)) ;;
@@ -34,7 +40,9 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
 用法: sudo bash scripts/install.sh [选项]
 
   --build               从当前源码构建并安装（默认从 GitHub Release 下载）
-  --version <x.y.z>     指定安装版本（默认取 Release 最新/仓库版本）
+  --version <x.y.z>     指定安装版本（默认取 GitHub 最新 Release）
+  --no-start            安装/升级后不启动服务（便于先改配置）
+  --no-systemd          不注册/不启动 systemd 服务（容器或手工管理场景）
   --sha256 <hex>        校验下载产物 SHA256（也可用 ESHIELD_EXPECTED_SHA）
   --rollback [dir]      回滚到备份目录（省略则使用最近一次备份）
   --uninstall           卸载（保留配置与数据）
@@ -43,6 +51,10 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
 
 升级时脚本会自动把当前二进制/配置/service 备份到
 /var/lib/eshield/backup/<时间戳>/，可用 --rollback 回退。
+
+一键安装（管道方式）:
+  curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+  curl -fsSL .../install.sh | sudo bash -s -- --version 0.5.1
 USAGE
             exit 0
             ;;
@@ -65,6 +77,19 @@ if [ -z "${VERSION:-}" ]; then
     fi
     VERSION="${VERSION:-$DEFAULT_VERSION}"
 fi
+# 管道安装（curl | sudo bash）时本地没有 Cargo.toml，DEFAULT_VERSION 可能尚未发布；
+# 这里优先解析 GitHub 最新 Release，失败再回退 DEFAULT_VERSION。
+lookup_latest_release() {
+    command -v curl >/dev/null 2>&1 || return 0
+    curl -fsSL --max-time 8 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -1
+}
+if [ -z "${VERSION_EXPLICIT:-}" ] && [ ! -f "Cargo.toml" ] && [ ! -f "eshield/Cargo.toml" ]; then
+    LATEST_VERSION="$(lookup_latest_release || true)"
+    if [ -n "${LATEST_VERSION}" ]; then
+        VERSION="${LATEST_VERSION}"
+    fi
+fi
 # 安装路径可用环境变量覆盖（便于无副作用地验证安装脚本本身）
 INSTALL_BIN="${ESHIELD_INSTALL_BIN:-/usr/local/bin/eshield}"
 INSTALL_CFG="${ESHIELD_INSTALL_CFG:-/etc/eshield/config.toml}"
@@ -86,12 +111,28 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 info "root 权限检查通过"
 
+# 管道安装需要 curl；缺失时直接给出可执行的安装提示
+if ! command -v curl >/dev/null 2>&1; then
+    err "未检测到 curl，无法下载发布产物"
+    err "  Debian/Ubuntu: apt-get install -y curl"
+    err "  RHEL/CentOS:   dnf install -y curl"
+    exit 1
+fi
+
+# systemd 可用性：容器/非 systemd 环境下自动降级，不阻塞安装
+if [ "$FORCE_NO_SYSTEMD" = "1" ]; then
+    SKIP_SYSTEMD=1
+elif ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    warn "未检测到运行中的 systemd，将只安装二进制与配置（不注册服务）"
+    SKIP_SYSTEMD=1
+fi
+
 # 2. 架构检查
 ARCH=$(uname -m)
 case "$ARCH" in
     x86_64) TARGET="x86_64-unknown-linux-musl" ;;
     aarch64) TARGET="aarch64-unknown-linux-musl"
-             if [ "${1:-}" != "--build" ]; then
+             if [ "$BUILD_MODE" != "1" ]; then
                  warn "官方 Release 目前仅提供 x86_64 产物；aarch64 建议使用源码构建:"
                  warn "  sudo bash scripts/install.sh --build"
              fi ;;
@@ -157,7 +198,7 @@ else
 fi
 
 # 9. 构建依赖检查（仅 --build 模式）
-if [ "${1:-}" = "--build" ]; then
+if [ "$BUILD_MODE" = "1" ]; then
     echo ""
     echo "── 构建依赖检查 ──"
     if ! command -v rustup >/dev/null 2>&1; then
@@ -408,6 +449,9 @@ blacklist = []
 mode = "auto"
 # 非首片 IPv4 分片策略（v0.5.0）：rate_limit（默认，按协议聚合限速）| drop | pass
 fragment_policy = "rate_limit"
+# 平滑升级（v0.5.1）：退出时保留 XDP 挂载（fail-closed），升级/重启期间防护不中断
+persist_link = true
+pin_path = "/sys/fs/bpf"
 
 [rate_limit]
 enabled = true
@@ -461,10 +505,34 @@ fi
 
 if [ -f "packaging/eshield.service" ]; then
     install -m 0644 "packaging/eshield.service" "$SERVICE_FILE"
+elif curl -fsSL --max-time 10 "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/eshield.service" -o "$SERVICE_FILE" 2>/dev/null; then
+    chmod 644 "$SERVICE_FILE"
 else
-    curl -fsSL "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/eshield.service" -o "$SERVICE_FILE"
+    warn "未能下载 systemd 单元，使用脚本内置默认单元"
+    cat > "$SERVICE_FILE" <<'UNIT'
+[Unit]
+Description=XuanArmor eBPF/XDP L3-L4 DDoS Shield
+Documentation=https://github.com/BlkSword/XuanArmor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/eshield start --config /etc/eshield/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    chmod 644 "$SERVICE_FILE"
 fi
-chmod 644 "$SERVICE_FILE"
 
 if [ "$SKIP_SYSTEMD" = "1" ]; then
     warn "ESHIELD_INSTALL_SKIP_SYSTEMD=1，跳过 systemd 注册（用于安装脚本自测）"
@@ -472,8 +540,10 @@ else
     systemctl daemon-reload
     systemctl enable eshield
 
+    if [ "$NO_START" = "1" ]; then
+        warn "已按 --no-start 跳过服务启动（修改配置后执行: sudo systemctl start eshield）"
     # 升级场景必须 restart（reload 只热加载配置，不会替换正在运行的二进制）
-    if systemctl is-active --quiet eshield; then
+    elif systemctl is-active --quiet eshield; then
         if [ "${UPGRADING:-0}" = "1" ]; then
             systemctl restart eshield
         else
@@ -481,6 +551,23 @@ else
         fi
     else
         systemctl start eshield
+    fi
+
+    # 安装后健康检查：/ready 同时反映 XDP 是否真正挂载
+    if [ "$NO_START" != "1" ]; then
+        READY_OK=0
+        for _ in $(seq 1 15); do
+            CODE=$(curl -s -o /dev/null -m 2 -w '%{http_code}' "http://127.0.0.1:${WEB_PORT}/ready" 2>/dev/null || true)
+            if [ "$CODE" = "200" ]; then READY_OK=1; break; fi
+            sleep 2
+        done
+        if [ "$READY_OK" = "1" ]; then
+            info "服务健康检查通过（/ready=200，XDP 已挂载）"
+        else
+            warn "服务未在 30 秒内就绪，请检查配置与日志："
+            warn "  sudo journalctl -u eshield -n 50 --no-pager"
+            warn "  常见原因：网卡名不存在 / 端口被占用 / XDP 模式与驱动不兼容"
+        fi
     fi
 fi
 

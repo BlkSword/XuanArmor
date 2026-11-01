@@ -11,6 +11,42 @@
 
 XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 Linux 内核网络协议栈之前拦截 SYN Flood、UDP Flood、ICMP Flood、扫描探测与连接耗尽类流量。项目由 Rust 实现，包含 eBPF 数据面、用户态控制面、分布式策略 Hub、Web 控制台、CLI 与 TUI。
 
+## 快速开始（一键部署）
+
+一行命令完成下载、SHA256 校验、安装、systemd 注册与启动：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+```
+
+- 默认安装 **最新 Release**，自动识别活动网卡并生成 `/etc/eshield/config.toml`；
+- 安装完成后访问 `http://<服务器IP>:8720` 进入控制台（首次登录先执行 `sudo eshield reset-token` 获取 Token）；
+- 确认防护状态：`curl -s http://127.0.0.1:8720/ready` 返回 `200` 表示服务就绪且 XDP 已挂载。
+
+常用变体：
+
+```bash
+# 指定版本
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1
+
+# 指定版本并校验 SHA256
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1 --sha256 <官方 SHA256>
+
+# 只安装不启动（先修改配置，再 systemctl start eshield）
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --no-start
+
+# 从源码构建并安装（需要 rustup / clang / bpf-linker）
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh --build
+
+# 升级（已安装 v0.5.1+ 时走平滑升级，数据面不中断）、回滚、卸载
+sudo bash scripts/install.sh --version 0.5.1
+sudo bash scripts/install.sh --rollback
+sudo bash scripts/install.sh --uninstall
+```
+
+环境要求：Linux 内核 ≥ 5.10 且启用 BTF、root 权限；建议 ≥ 512MB 内存（详见 [docs/deployment.md](docs/deployment.md)）。
+升级、回滚与配置说明见 [docs/operations.md](docs/operations.md)。
+
 ## 控制台预览
 
 内置 Web 控制台为单文件 SPA（内嵌进二进制，无需额外部署静态资源），设计目标是**高密度、低噪声的运维视图**：
@@ -37,6 +73,7 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 
 ## 目录
 
+- [快速开始（一键部署）](#快速开始一键部署)
 - [1. 项目概述](#1-项目概述)
 - [2. 能力范围](#2-能力范围)
 - [3. 系统架构](#3-系统架构)

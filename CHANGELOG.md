@@ -11,6 +11,10 @@
   支持 `--rollback <dir>`、`--no-systemd --pid <pid>`、`--exec-prefix`。
 - `eshield detach`：摘除网卡上的 XDP 程序（`persist_link = true` 时服务停止后程序仍会驻留）。
 - `eshield --version`。
+- `scripts/install.sh` 支持管道一键安装（`curl … | sudo bash`）：未指定版本时自动解析
+  GitHub 最新 Release；systemd 不可用时优雅降级；新增 `--no-start`、`--no-systemd`；
+  内嵌 systemd 单元作为下载失败兜底；安装后轮询 `/ready` 做健康检查并给出排障提示。
+  默认配置补充 `[xdp].persist_link`、`pin_path`。
 - `scripts/install.sh` 升级路径优先调用已安装二进制的 `upgrade` 子命令；
   旧版本（无该子命令）回退为停服安装启动，并在升级时使用 `systemctl restart` 而非 `reload`。
 
@@ -28,6 +32,12 @@
 
 - 新增配置项有默认值，旧配置文件可直接加载。
 - 若服务停止后不希望保留 XDP 挂载，升级前将 `persist_link` 设为 `false`，或停止后执行 `eshield detach`。
+
+### 文档
+
+- `README.md` / `README_EN.md`：一键部署移至「快速开始」首位，补充管道安装、指定版本、
+  `--no-start`、源码构建与升级/回滚命令；控制台截图更新为 XuanArmor 品牌。
+- 控制台版本号由构建时注入（`package.json` → `__APP_VERSION__`），侧边栏与运行状态显示 0.5.1。
 
 ### 测试
 

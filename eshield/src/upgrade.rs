@@ -46,8 +46,14 @@ pub fn run(opts: UpgradeOptions) -> anyhow::Result<()> {
         bail!("新二进制不存在: {}", opts.binary.display());
     }
     let new_version = run_version(&opts.binary)?;
-    info!("准备升级到 {new_version}（新二进制 {}）", opts.binary.display());
-    eprintln!("[upgrade] 新版本 {new_version}，配置 {}", opts.config.display());
+    info!(
+        "准备升级到 {new_version}（新二进制 {}）",
+        opts.binary.display()
+    );
+    eprintln!(
+        "[upgrade] 新版本 {new_version}，配置 {}",
+        opts.config.display()
+    );
 
     if !opts.skip_config_check {
         let out = Command::new(&opts.binary)
@@ -80,7 +86,10 @@ pub fn run(opts: UpgradeOptions) -> anyhow::Result<()> {
         fs::set_permissions(&backup_bin, fs::Permissions::from_mode(0o755))?;
     }
     let _ = fs::copy(&opts.config, backup_dir.join("config.toml"));
-    fs::write(backup_dir.join("VERSION"), current_version(&opts.install_bin))?;
+    fs::write(
+        backup_dir.join("VERSION"),
+        current_version(&opts.install_bin),
+    )?;
     info!("已备份当前版本到 {}", backup_dir.display());
     eprintln!("[upgrade] 已备份当前版本到 {}", backup_dir.display());
 
@@ -104,7 +113,10 @@ pub fn run(opts: UpgradeOptions) -> anyhow::Result<()> {
                 "升级完成：{new_version}（{}），数据面在切换期间未中断",
                 opts.install_bin.display()
             );
-            info!("回滚命令：eshield upgrade --rollback {}", backup_dir.display());
+            info!(
+                "回滚命令：eshield upgrade --rollback {}",
+                backup_dir.display()
+            );
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(300));
@@ -263,11 +275,15 @@ fn stop_service(opts: &UpgradeOptions) -> anyhow::Result<()> {
         .pid
         .ok_or_else(|| anyhow!("--no-systemd 模式需要提供 --pid <旧进程 PID>"))?;
     info!("发送 SIGTERM 到 {}", pid);
-    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let _ = Command::new("kill")
+        .args(["-TERM", &pid.to_string()])
+        .status();
     if !wait_stopped(Some(pid), 15) {
         // 优雅退出失败（例如卡在清理阶段）→ 强制结束，避免新进程抢不到 redb 锁
         warn!("旧进程 {pid} 在 15s 内未退出，发送 SIGKILL");
-        let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
         if !wait_stopped(Some(pid), 5) {
             anyhow::bail!("无法停止旧进程 {pid}，升级中止（服务保持原状）");
         }
@@ -302,7 +318,9 @@ fn install_from(src: &Path, dst: &Path) -> anyhow::Result<()> {
     fs::create_dir_all(parent).ok();
     let tmp = parent.join(format!(
         ".{}.new.{}",
-        dst.file_name().and_then(|s| s.to_str()).unwrap_or("eshield"),
+        dst.file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("eshield"),
         std::process::id()
     ));
     fs::copy(src, &tmp).with_context(|| format!("复制到 {} 失败", tmp.display()))?;
@@ -333,9 +351,7 @@ fn start_service(opts: &UpgradeOptions) -> anyhow::Result<()> {
         .append(true)
         .open(&opts.log_file)
         .with_context(|| format!("无法打开日志 {}", opts.log_file.display()))?;
-    let log_err = log
-        .try_clone()
-        .with_context(|| "无法复制日志文件句柄")?;
+    let log_err = log.try_clone().with_context(|| "无法复制日志文件句柄")?;
     info!("以独立会话启动新进程（日志：{}）", opts.log_file.display());
     let mut cmd = Command::new("setsid");
     let prefix: Vec<&str> = opts

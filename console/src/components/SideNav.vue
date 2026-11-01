@@ -5,6 +5,8 @@ import { navGroups } from '../router'
 import { store } from '../stores/app'
 import { fmtCompact } from '../utils/format'
 
+const appVersion = __APP_VERSION__
+
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'navigate'): void }>()
 const route = useRoute()
@@ -35,7 +37,7 @@ const attackBadge = computed(() => {
         </svg>
       </div>
       <div class="brand-name">XuanArmor</div>
-      <div class="brand-ver">0.4.8</div>
+      <div class="brand-ver">{{ appVersion }}</div>
     </div>
     <div class="side-scroll">
       <div v-for="g in navGroups" :key="g.label" class="nav-group">
