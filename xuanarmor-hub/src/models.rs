@@ -1,9 +1,9 @@
-use xuanarmor_common::IpKey;
 use serde::{Deserialize, Serialize};
+use xuanarmor_common::IpKey;
 
 mod ip_key_serde {
-    use xuanarmor_common::IpKey;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use xuanarmor_common::IpKey;
 
     #[derive(Serialize, Deserialize)]
     #[serde(remote = "IpKey")]

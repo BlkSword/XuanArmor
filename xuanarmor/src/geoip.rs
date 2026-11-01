@@ -1,10 +1,10 @@
 use crate::ip::parse_cidr;
 use anyhow::{Context, Result};
-use xuanarmor_common::IpKey;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use tracing::{debug, warn};
+use xuanarmor_common::IpKey;
 
 /// 封禁的 CIDR 条目（支持 IPv4/IPv6）。
 #[derive(Debug, Clone)]

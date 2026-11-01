@@ -28,7 +28,6 @@ use anyhow::Context;
 use aya::{include_bytes_aligned, maps::HashMap as LruHashMap, programs::Xdp, Ebpf};
 use aya_log::EbpfLogger;
 use clap::{Parser, Subcommand};
-use xuanarmor_common::{GlobalStats, IpKey};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -37,6 +36,7 @@ use std::time::Duration;
 use tokio::signal;
 use tokio::signal::unix::{signal as unix_signal, SignalKind};
 use tracing::{info, warn};
+use xuanarmor_common::{GlobalStats, IpKey};
 
 use crate::{
     alert::{AlertConfig, AlertManager},
@@ -297,9 +297,10 @@ fn preflight_memory(config: &Config) -> anyhow::Result<()> {
 
     let refuse = config.limits.refuse_memory_mb;
     let min = config.limits.min_memory_mb;
-    let low_mem_override = crate::config::env_compat("XUANARMOR_ALLOW_LOW_MEMORY", "ESHIELD_ALLOW_LOW_MEMORY")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let low_mem_override =
+        crate::config::env_compat("XUANARMOR_ALLOW_LOW_MEMORY", "ESHIELD_ALLOW_LOW_MEMORY")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
 
     if total_mb < refuse {
         if !low_mem_override {
@@ -557,7 +558,10 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         .unwrap_or_else(|| format!("0.0.0.0:{}", config.web_port));
     // 控制台默认是明文 HTTP + Bearer Token/Cookie；token 一旦被嗅探即可完全接管。
     // 非环回监听且未显式声明"已在 TLS 反代之后"时给出显著告警（不阻断启动）。
-    if !bind_is_loopback(&web_bind) && crate::config::env_compat("XUANARMOR_ASSUME_TLS_PROXY", "ESHIELD_ASSUME_TLS_PROXY").is_none() {
+    if !bind_is_loopback(&web_bind)
+        && crate::config::env_compat("XUANARMOR_ASSUME_TLS_PROXY", "ESHIELD_ASSUME_TLS_PROXY")
+            .is_none()
+    {
         warn!(
             "控制台以**明文 HTTP** 监听在 {web_bind}：请置于 nginx/Caddy 等 TLS 反向代理之后，\
              否则控制台口令与 API Token 会在网络上明文传输。\

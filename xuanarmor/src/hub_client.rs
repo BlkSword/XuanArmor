@@ -1,13 +1,13 @@
 use crate::config::{HubConfig, HubTlsConfig};
 use crate::control::ControlState;
 use anyhow::{Context, Result};
-use xuanarmor_common::IpKey;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
 use std::time::Duration;
+use xuanarmor_common::IpKey;
 
 /// Node 上报给 Hub 的单条策略。
 #[derive(Debug, Clone, Serialize, Deserialize)]

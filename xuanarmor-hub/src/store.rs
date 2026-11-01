@@ -1,9 +1,9 @@
 use crate::models::{NodePolicy, SharedPolicy};
 use crate::time::now_ns;
 use anyhow::{Context, Result};
-use xuanarmor_common::IpKey;
 use redb::{Database, ReadableTable, TableDefinition};
 use std::path::Path;
+use xuanarmor_common::IpKey;
 
 const POLICIES_TABLE: TableDefinition<&[u8; 25], &[u8]> = TableDefinition::new("policies");
 /// 源 IP -> 当前复合键的二级索引，避免每次 push 全量扫描策略表。
@@ -400,8 +400,8 @@ impl Store {
 mod tests {
     use super::*;
     use crate::models::NodePolicy;
-    use xuanarmor_common::IpKey;
     use tempfile::NamedTempFile;
+    use xuanarmor_common::IpKey;
 
     fn tmp_store() -> (Store, NamedTempFile) {
         let file = NamedTempFile::new().unwrap();

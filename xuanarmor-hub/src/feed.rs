@@ -1,10 +1,10 @@
 use crate::models::NodePolicy;
 use crate::store::Store;
 use anyhow::{Context, Result};
-use xuanarmor_common::{rules, IpKey};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use xuanarmor_common::{rules, IpKey};
 
 /// Hub 侧威胁情报 feed 配置。
 #[derive(Clone, Debug)]

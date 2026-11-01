@@ -1,8 +1,8 @@
 use anyhow::Context;
-use xuanarmor_common::{IpKey, PortAclEntry};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use xuanarmor_common::{IpKey, PortAclEntry};
 
 /// 黑名单条目的来源，用于区分本地生成与 Hub 下发，避免策略回环。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -683,6 +683,13 @@ fn default_port_rate_threshold() -> u64 {
     2000
 }
 
+/// 读取环境变量，兼容 v0.5.x 的旧前缀（ESHIELD_*）。
+pub fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
+    std::env::var(new_name)
+        .ok()
+        .or_else(|| std::env::var(old_name).ok())
+}
+
 /// 启动资源预检（v0.5.0）：避免在过小规格机器上"装上就跑、跑着被 OOM"。
 /// 实测 400MB 内存实例在装 nginx + XuanArmor 后 sshd 失去响应。
 #[derive(Debug, Clone, Deserialize)]
@@ -690,14 +697,7 @@ pub struct LimitsConfig {
     /// 低于该值启动时打印醒目告警（默认 512MB）
     #[serde(default = "default_min_memory_mb")]
     pub min_memory_mb: u64,
-    /// 读取环境变量，兼容 v0.5.x 的旧前缀（ESHIELD_*）。
-pub fn env_compat(new_name: &str, old_name: &str) -> Option<String> {
-    std::env::var(new_name)
-        .ok()
-        .or_else(|| std::env::var(old_name).ok())
-}
-
-/// 低于该值直接拒绝启动（默认 256MB），可用 XUANARMOR_ALLOW_LOW_MEMORY=1 强制启动
+    /// 低于该值直接拒绝启动（默认 256MB），可用 XUANARMOR_ALLOW_LOW_MEMORY=1 强制启动
     #[serde(default = "default_refuse_memory_mb")]
     pub refuse_memory_mb: u64,
 }

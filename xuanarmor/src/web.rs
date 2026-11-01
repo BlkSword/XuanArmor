@@ -26,9 +26,9 @@ use crate::ip::{format_ip_key, parse_ip};
 use crate::login_limiter::LoginLimiter;
 use crate::packet_log::{PacketLog, PacketLogQuery};
 use crate::state::Stats;
-use xuanarmor_common::{BlockEntry, IpKey, TrustEntry};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
+use xuanarmor_common::{BlockEntry, IpKey, TrustEntry};
 
 /// New console: single-file Vue 3 SPA built from `console/`.
 const APP_HTML: &str = include_str!("../web/app.html");
@@ -862,7 +862,8 @@ async fn list_blacklist_handler(
             .iter()
             .flatten()
             .filter(|(_, e)| {
-                e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT || e.blocked_until_ns > now_ns
+                e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT
+                    || e.blocked_until_ns > now_ns
             })
             .map(|(key, e)| {
                 let reason = e.block_reason as u16;

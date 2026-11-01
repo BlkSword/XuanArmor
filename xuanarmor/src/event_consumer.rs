@@ -1,11 +1,11 @@
 use aya::maps::{MapData, RingBuf};
 use aya::Ebpf;
-use xuanarmor_common::{DropEvent, IpFamily, IpKey};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::time::{interval, Duration};
 use tracing::debug;
+use xuanarmor_common::{DropEvent, IpFamily, IpKey};
 
 use crate::adaptive::AdaptiveEngine;
 use crate::ip::format_ip_key;

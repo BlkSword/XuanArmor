@@ -1,12 +1,12 @@
 use crate::config::BlockOrigin;
 use crate::timeseries::MetricPoint;
 use anyhow::Context;
-use xuanarmor_common::{IpKey, BLOCK_PERMANENT};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use xuanarmor_common::{IpKey, BLOCK_PERMANENT};
 
 // 使用 JSON 字节作为 value，避免自定义 RedbValue 实现。
 const BLACKLIST: TableDefinition<&[u8], &[u8]> = TableDefinition::new("blacklist");

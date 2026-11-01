@@ -1,6 +1,6 @@
 use anyhow::Context;
-use xuanarmor_common::IpKey;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use xuanarmor_common::IpKey;
 
 /// 将 IpKey 格式化为可读的 IPv4/IPv6 字符串。
 pub fn format_ip_key(key: &IpKey) -> String {

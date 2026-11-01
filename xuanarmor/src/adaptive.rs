@@ -1,7 +1,7 @@
 use aya::maps::HashMap as LruHashMap;
 use aya::Ebpf;
-use xuanarmor_common::{rules, BlockEntry, IpKey, BLOCK_PERMANENT};
 use std::sync::atomic::Ordering;
+use xuanarmor_common::{rules, BlockEntry, IpKey, BLOCK_PERMANENT};
 
 use crate::config::AdaptiveConfig;
 use crate::ip::format_ip_key;

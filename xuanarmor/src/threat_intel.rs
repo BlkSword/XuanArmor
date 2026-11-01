@@ -2,9 +2,9 @@ use crate::config::BlockOrigin;
 use crate::control::ControlState;
 use crate::ip::{format_ip_key, parse_ip_or_cidr};
 use anyhow::{Context, Result};
-use xuanarmor_common::{rules, IpKey};
 use std::sync::Arc;
 use std::time::Duration;
+use xuanarmor_common::{rules, IpKey};
 
 /// 后台威胁情报同步器。
 pub struct ThreatIntelSync {

@@ -1,9 +1,9 @@
 use dashmap::DashMap;
-use xuanarmor_common::{DropEvent, IpKey};
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
+use xuanarmor_common::{DropEvent, IpKey};
 
 use crate::timeseries::TimeSeriesWindow;
 

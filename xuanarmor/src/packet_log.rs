@@ -1,8 +1,8 @@
-use xuanarmor_common::{IpFamily, IpKey, PacketSample};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tracing::warn;
+use xuanarmor_common::{IpFamily, IpKey, PacketSample};
 
 use crate::ip::format_ip_key;
 

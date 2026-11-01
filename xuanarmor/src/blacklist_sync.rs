@@ -5,12 +5,12 @@ use aya::maps::HashMap as LruHashMap;
 use aya::maps::PerCpuArray;
 use aya::Ebpf;
 use dashmap::DashMap;
-use xuanarmor_common::{rules, BlockEntry, GlobalStats, IpKey};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
+use xuanarmor_common::{rules, BlockEntry, GlobalStats, IpKey};
 
 type SyncScan = (Option<(u64, u64)>, Vec<(IpKey, BlockEntry)>, bool);
 
