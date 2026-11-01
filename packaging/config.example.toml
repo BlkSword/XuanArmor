@@ -92,7 +92,7 @@ auto_reattach = true        # 每 15s 校验挂载状态，被摘掉时自动重
 # 注意：rate_limit 依赖 [port_rate_limit].enabled = true；若关闭端口聚合限速，分片等同 pass。
 fragment_policy = "rate_limit"
 
-# 平滑升级（v0.6.0）：进程退出时不摘除 XDP 程序（fail-closed），旧程序继续过滤，
+# 平滑升级（v0.5.2）：进程退出时不摘除 XDP 程序（fail-closed），旧程序继续过滤，
 # 新进程启动时由内核原子替换，升级期间数据面不中断。
 # 需要显式卸载时执行 `xuanarmor detach`；设为 false 则恢复「退出即卸载」的旧行为。
 persist_link = true

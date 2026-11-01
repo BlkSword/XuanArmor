@@ -65,7 +65,7 @@ sudo bash scripts/install.sh --help
 
 ### 升级
 
-v0.6.0 起默认 `[xdp].persist_link = true`：进程退出时**不摘除** XDP 程序，新进程启动时由内核
+v0.5.2 起默认 `[xdp].persist_link = true`：进程退出时**不摘除** XDP 程序，新进程启动时由内核
 原子替换程序，因此升级/重启期间数据面不中断（旧程序持续过滤，直到新程序接管）。
 控制面（HTTP/控制台）在重启瞬间有短暂不可用。
 
@@ -103,9 +103,9 @@ sudo xuanarmor check --config /etc/xuanarmor/config.toml
 └── VERSION            # 旧版本号
 ```
 
-### 平滑升级（v0.6.0）
+### 平滑升级（v0.5.2）
 
-`scripts/install.sh` 检测到已安装 v0.6.0+ 时，会优先调用已安装二进制的 `upgrade` 子命令完成替换；
+`scripts/install.sh` 检测到已安装 v0.5.2+ 时，会优先调用已安装二进制的 `upgrade` 子命令完成替换；
 也可手动执行：
 
 ```bash

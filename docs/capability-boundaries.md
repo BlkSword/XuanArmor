@@ -189,11 +189,11 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
 - **缓解**：大流量场景在 DNS/Anycast/负载均衡层做流量调度，XuanArmor 负责每台主机自己的兜底。
 - **现状**：不做跨机流量调度。
 
-### B15. 服务停止后 XDP 程序仍驻留（`persist_link`，v0.6.0）
+### B15. 服务停止后 XDP 程序仍驻留（`persist_link`，v0.5.2）
 
 - **现象**：执行 `systemctl stop xuanarmor` 后 `ip -d link show <iface>` 仍能看到 XDP 程序，
   流量继续被过滤。
-- **原因**：v0.6.0 起 `[xdp].persist_link = true`（默认）：为避免升级/重启期间防护中断，
+- **原因**：v0.5.2 起 `[xdp].persist_link = true`（默认）：为避免升级/重启期间防护中断，
   进程退出时不摘除 XDP 挂载，旧程序继续按最后下发的策略过滤（fail-closed）。
 - **缓解**：需要彻底卸载时执行 `xuanarmor detach --config /etc/xuanarmor/config.toml`
   （删除 pinned link 并 `ip link set dev <iface> xdp off`）；或把 `persist_link` 设为 `false`，

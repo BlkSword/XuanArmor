@@ -1,6 +1,6 @@
 # XuanArmor
 
-> 原名 eShield，自 v0.6.0 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
+> 原名 eShield，自 v0.5.2 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
 
 [English](README_EN.md) | 中文
 
@@ -42,7 +42,7 @@ curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/ins
 # 从源码构建并安装（需要 rustup / clang / bpf-linker）
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh --build
 
-# 升级（已安装 v0.6.0+ 时走平滑升级，数据面不中断）、回滚、卸载
+# 升级（已安装 v0.5.2+ 时走平滑升级，数据面不中断）、回滚、卸载
 sudo bash scripts/install.sh --version 0.5.1
 sudo bash scripts/install.sh --rollback
 sudo bash scripts/install.sh --uninstall
@@ -97,7 +97,7 @@ sudo bash scripts/install.sh --uninstall
 
 ## 1. 项目概述
 
-> **v0.6.0（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
+> **v0.5.2（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
 > 新进程启动时原子替换，升级/重启期间数据面不中断；新增 `xuanarmor upgrade`（备份、健康检查、失败回滚）与
 > `xuanarmor detach`；Web 监听支持 `SO_REUSEPORT` 并优雅关闭。
 > **v0.5.0（2026-10-31）**：产品化与能力补齐。修复伪造源 IP 与 IPv4 分片绕过（默认开启按目的端口聚合
@@ -236,10 +236,10 @@ sudo bash scripts/install.sh --build
 4. 创建默认配置 `/etc/xuanarmor/config.toml`（升级时不会覆盖已有配置）。
 5. 安装并启用 systemd 服务。
 
-升级、回滚与卸载（v0.6.0）：
+升级、回滚与卸载（v0.5.2）：
 
 ```bash
-# 已安装 v0.6.0+ 时，install.sh 会调用 xuanarmor upgrade：
+# 已安装 v0.5.2+ 时，install.sh 会调用 xuanarmor upgrade：
 #   旧进程退出期间 XDP 保持挂载，新进程启动时原子替换程序；健康检查失败自动回滚。
 # 也可直接使用 CLI（同一流程）：
 sudo xuanarmor upgrade --binary /path/to/new/xuanarmor --config /etc/xuanarmor/config.toml
@@ -366,7 +366,7 @@ XUANARMOR_XDP_MODE=skb sudo xuanarmor start --config /etc/xuanarmor/config.toml
 | `api_token` | 读写 Bearer Token；未设置时生成随机 Token。 |
 | `readonly_token` | **v0.5.0**：只读 Token，仅允许 GET/HEAD/OPTIONS，写操作 403。 |
 | `whitelist` / `blacklist` | 启动时加载的静态 CIDR 白名单与永久黑名单。 |
-| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）、分片策略 `fragment_policy`（v0.5.0）与平滑升级相关 `persist_link`/`pin_path`（v0.6.0）。 |
+| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）、分片策略 `fragment_policy`（v0.5.0）与平滑升级相关 `persist_link`/`pin_path`（v0.5.2）。 |
 | `[limits]` | **v0.5.0**：启动内存预检（`min_memory_mb` 告警、`refuse_memory_mb` 拒绝启动）。 |
 | `[rate_limit]` | per-IP 指数衰减速率限制、触发封禁时长与 `block_mode`（hard/soft，v0.5.0）。 |
 | `[port_rate_limit]` | 按协议与目的端口的固定窗口限速，**v0.5.0 起默认开启**。 |

@@ -6,7 +6,7 @@
 
 ## 1. 项目概述
 
-**XuanArmor**（版本 `0.6.0`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
+**XuanArmor**（版本 `0.5.2`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
 
 - **数据面**：用 Rust/Aya 编写的 eBPF 程序挂载在 Linux XDP 钩子上，在包进入内核网络协议栈之前完成过滤/丢弃/挑战。
 - **控制面**：Rust + Tokio + axum，提供 REST API、中文 Web Dashboard、CLI、TUI、审计日志、持久化与告警。
@@ -76,11 +76,11 @@
 - `state.rs`：内存中的统计状态（PPS/DPS、Top 攻击源、Trust Score 分布等）。
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
 - `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
-  v0.6.0 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
-- `xdp_link.rs`：XDP 挂载生命周期（v0.6.0）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
+  v0.5.2 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
+- `xdp_link.rs`：XDP 挂载生命周期（v0.5.2）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
   （`[xdp].persist_link`，默认 true），进程退出后旧程序继续过滤，新进程用 `bpf_link_update`
   原子替换；`pin_path` 不可用时回退 `/run/xuanarmor-bpf`。
-- `upgrade.rs`：`xuanarmor upgrade`（v0.6.0）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
+- `upgrade.rs`：`xuanarmor upgrade`（v0.5.2）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
   `/ready` 健康检查 → 失败自动回滚；支持 `--rollback`、`--no-systemd --pid`、`--exec-prefix`。
 - `auth.rs`：Bearer Token 认证；本机 `127.0.0.1/::1` 自动跳过校验；v0.5.0 起支持 `readonly_token`
   只读角色（仅 GET/HEAD/OPTIONS，写操作 403）与 `GET /api/auth/check` 角色查询。
@@ -303,7 +303,7 @@ sudo bash scripts/benchmark.sh
 - `whitelist` / `blacklist`：启动时加载的静态 CIDR 白名单与永久黑名单。
 - `[xdp]`：XDP 挂载策略（`mode = auto|native|generic`、`disable_offloads`、`auto_reattach`）、
   `fragment_policy = pass|rate_limit|drop`（v0.5.0，默认 `rate_limit`，按「协议 + 0 端口」聚合限速）、
-  `persist_link = true`（v0.6.0，退出时保留 XDP 挂载）与 `pin_path = "/sys/fs/bpf"`（pinned link 所在 bpffs）。
+  `persist_link = true`（v0.5.2，退出时保留 XDP 挂载）与 `pin_path = "/sys/fs/bpf"`（pinned link 所在 bpffs）。
 - `[limits]`：启动内存预检（v0.5.0）——`min_memory_mb`（默认 512，告警）、
   `refuse_memory_mb`（默认 256，拒绝启动），`XUANARMOR_ALLOW_LOW_MEMORY=1` 可强制启动（不推荐）。
 - `[rate_limit]`：per-IP 速率限制（默认 threshold=2000、封禁 120s；threshold 是"突发信用"，
@@ -395,7 +395,7 @@ docker run -d --name xuanarmor \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/xuanarmor/config.toml:/etc/xuanarmor/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/xuanarmor:v0.6.0
+  ghcr.io/blksword/xuanarmor:v0.5.2
 ```
 
 ### 8.3 分布式 Hub
@@ -467,7 +467,7 @@ sync_rules_enabled = true
   已知限制：virtio_net 在宿主机开启 GRO_HW/CSUM 时会拒绝 native XDP，`ethtool -k` 显示
   `rx-gro-hw: on [fixed]` 时 guest 侧无解，只能跑 generic（性能显著低于 native）。
   挂载状态由后台任务每 15s 校验：程序被摘掉时 `/ready` 返回 503 并自动重挂。
-  v0.6.0 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
+  v0.5.2 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
   彻底卸载用 `xuanarmor detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
   容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/xuanarmor-bpf`）。
 - **eBPF 构建**：debug 构建因 `overflow-checks` 与未内联代码容易导致 verifier/bpf-linker 失败，因此工作空间默认 `opt-level = 3`；发布构建使用 `panic = abort`、`lto = true`、`strip = true`。

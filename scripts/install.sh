@@ -65,7 +65,7 @@ done
 # GitHub 仓库（与 scripts/publish-release.sh 保持一致；可用 XUANARMOR_REPO 覆盖）
 REPO="${XUANARMOR_REPO:-${ESHIELD_REPO:-BlkSword/XuanArmor}}"
 # 优先从环境变量读取版本；未设置时依次尝试 workspace / xuanarmor crate 的 Cargo.toml；最后回退到默认版本。
-DEFAULT_VERSION="0.6.0"
+DEFAULT_VERSION="0.5.2"
 if [ -z "${VERSION:-}" ]; then
     if [ -f "Cargo.toml" ] && grep -qE '^\[workspace\]' Cargo.toml 2>/dev/null; then
         # workspace 根 Cargo.toml 不含 version，版本在 xuanarmor/Cargo.toml

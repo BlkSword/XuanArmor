@@ -1,6 +1,6 @@
 # XuanArmor
 
-> Formerly eShield; the project was renamed to **XuanArmor** in v0.6.0. The executable, systemd unit, config path (`/etc/xuanarmor`) and `XUANARMOR_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
+> Formerly eShield; the project was renamed to **XuanArmor** in v0.5.2. The executable, systemd unit, config path (`/etc/xuanarmor`) and `XUANARMOR_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
 
 [中文](README.md) | English
 
@@ -68,7 +68,7 @@ Requirements: Linux kernel >= 5.10 with BTF, root privileges; >= 512MB RAM recom
 
 ## 1. Overview
 
-> **v0.6.0 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
+> **v0.5.2 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
 > filtering while the process restarts; the new process replaces it atomically, with no data-plane gap.
 > Adds `xuanarmor upgrade` (backup, health check, automatic rollback), `xuanarmor detach`, SO_REUSEPORT web listener
 > and graceful shutdown.

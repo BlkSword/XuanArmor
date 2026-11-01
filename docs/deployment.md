@@ -43,7 +43,7 @@ sudo bash scripts/install.sh --build
 安装脚本会：构建/下载二进制 → 校验 ELF 与 SHA256SUMS → 安装到 `/usr/local/bin/xuanarmor` →
 创建 `/etc/xuanarmor/config.toml`（网卡按实际活动网卡写入）→ 安装并启动 systemd 服务。
 
-v0.6.0 起脚本同时支持平滑升级与生命周期管理：
+v0.5.2 起脚本同时支持平滑升级与生命周期管理：
 
 ```bash
 sudo bash scripts/install.sh --version 0.5.1            # 指定版本升级（升级前自动备份）
@@ -70,7 +70,7 @@ sudo install -m 755 xuanarmor-x86_64-unknown-linux-musl /usr/local/bin/xuanarmor
 ```bash
 sudo mkdir -p /etc/xuanarmor
 sudo curl -fsSL -o /etc/xuanarmor/config.toml \
-  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.6.0/packaging/config.example.toml
+  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.5.2/packaging/config.example.toml
 sudoedit /etc/xuanarmor/config.toml
 ```
 
@@ -78,7 +78,7 @@ sudoedit /etc/xuanarmor/config.toml
 
 ```bash
 sudo curl -fsSL -o /lib/systemd/system/xuanarmor.service \
-  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.6.0/packaging/xuanarmor.service
+  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.5.2/packaging/xuanarmor.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now xuanarmor
 ```
@@ -98,7 +98,7 @@ docker run -d --name xuanarmor \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/xuanarmor/config.toml:/etc/xuanarmor/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/xuanarmor:v0.6.0
+  ghcr.io/blksword/xuanarmor:v0.5.2
 ```
 
 > 容器内需要能访问宿主网卡才能挂载 XDP，通常使用 `--network host` 并显式指定 `XUANARMOR_XDP_MODE=skb`。
