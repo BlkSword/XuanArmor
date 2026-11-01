@@ -28,6 +28,17 @@
 - Web 监听改为 `SO_REUSEPORT`，并在退出时优雅关闭（排空在途请求）。
 - 退出流程增加 8s 看门狗：后台任务异常不会阻塞 `systemctl stop`。
 
+### 修复
+
+- `scripts/install.sh`：修复 `--version` 等带值参数在 `set -e` 下静默退出；
+  安装时创建 systemd 单元引用的 `/var/lib/eshield`、`/var/log/eshield` 目录；
+  自动准备 bpffs 挂载（`/run/eshield-bpf`），确保 XDP link 可 pin；
+  systemd 不可运行时降级为仅安装二进制。
+- `systemd` 单元允许写 `/sys/fs/bpf` 与 `/run/eshield-bpf`，并声明
+  `StateDirectory`/`LogsDirectory` 自动建目录。
+- `probe_xdp` 兼容 `ip -j -d` 的 `attached[]` 结构，程序名未知时按已挂载处理，
+  避免把已挂载状态误判为裸奔并反复重挂。
+
 ### 兼容性
 
 - 新增配置项有默认值，旧配置文件可直接加载。

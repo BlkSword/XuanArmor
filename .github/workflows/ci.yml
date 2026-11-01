@@ -53,7 +53,7 @@ jobs:
         with:
           components: rust-src, clippy
       - name: Pin tested eBPF nightly (LLVM/verifier compatible)
-        run: rustup toolchain install nightly-2026-07-31 --profile minimal --component rust-src
+        run: rustup toolchain install nightly-2026-07-31 --profile minimal --component rust-src --component clippy
       - name: Install build dependencies (LLVM/clang/musl)
         run: |
           sudo apt-get update
