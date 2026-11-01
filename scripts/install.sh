@@ -273,8 +273,8 @@ do_uninstall() {
         systemctl stop eshield 2>/dev/null || true
         systemctl disable eshield 2>/dev/null || true
         rm -f "$SERVICE_FILE"
-        systemctl disable --now run-eshield-bpf.mount 2>/dev/null || true
-        rm -f /etc/systemd/system/run-eshield-bpf.mount
+        systemctl disable --now 'run-eshield\x2dbpf.mount' 2>/dev/null || true
+        rm -f '/etc/systemd/system/run-eshield\x2dbpf.mount'
         systemctl daemon-reload 2>/dev/null || true
     fi
     rm -f "$INSTALL_BIN"
@@ -424,7 +424,8 @@ chmod 755 /var/lib/eshield /var/log/eshield 2>/dev/null || true
 if [ "$SKIP_SYSTEMD" != "1" ]; then
     mkdir -p /run/eshield-bpf
     if ! mountpoint -q /run/eshield-bpf; then
-        cat > /etc/systemd/system/run-eshield-bpf.mount <<'MOUNTUNIT'
+        # 注意：mount 单元名必须与挂载点对应，路径中的 '-' 需转义为 \x2d
+        cat > '/etc/systemd/system/run-eshield\x2dbpf.mount' <<'MOUNTUNIT'
 [Unit]
 Description=bpffs for XuanArmor XDP link pinning
 
@@ -438,7 +439,7 @@ Options=mode=700
 WantedBy=multi-user.target
 MOUNTUNIT
         systemctl daemon-reload
-        systemctl enable --now run-eshield-bpf.mount >/dev/null 2>&1 || warn "bpffs 挂载单元启用失败，XDP link 可能无法持久化"
+        systemctl enable --now 'run-eshield\x2dbpf.mount' >/dev/null 2>&1 || warn "bpffs 挂载单元启用失败，XDP link 可能无法持久化"
         info "已准备 bpffs: /run/eshield-bpf"
     fi
 fi
