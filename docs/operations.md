@@ -1,4 +1,4 @@
-# eShield 运维手册
+# XuanArmor 运维手册
 
 > 版本：v0.5.0（2026-10-31）
 >
@@ -65,12 +65,16 @@ sudo bash scripts/install.sh --help
 
 ### 升级
 
+v0.5.1 起默认 `[xdp].persist_link = true`：进程退出时**不摘除** XDP 程序，新进程启动时由内核
+原子替换程序，因此升级/重启期间数据面不中断（旧程序持续过滤，直到新程序接管）。
+控制面（HTTP/控制台）在重启瞬间有短暂不可用。
+
 ```bash
-# 1) 低峰期执行；升级会停止旧进程再启动新进程，XDP 需要重新挂载（秒级防护空窗）
-sudo bash scripts/install.sh --version 0.5.0
+# 1) 低峰期执行；数据面不中断，控制面短暂不可用
+sudo bash scripts/install.sh --version 0.5.1
 
 # 2) 可选：同时校验下载产物 SHA256
-sudo bash scripts/install.sh --version 0.5.0 --sha256 <官方发布的 sha256>
+sudo bash scripts/install.sh --version 0.5.1 --sha256 <官方发布的 sha256>
 
 # 3) 升级后确认版本与状态
 curl -s http://127.0.0.1:8720/api/config | jq -r .version
@@ -97,6 +101,45 @@ sudo eshield check --config /etc/eshield/config.toml
 ├── config.toml        # 旧配置
 ├── eshield.service    # 旧 systemd 单元
 └── VERSION            # 旧版本号
+```
+
+### 平滑升级（v0.5.1）
+
+`scripts/install.sh` 检测到已安装 v0.5.1+ 时，会优先调用已安装二进制的 `upgrade` 子命令完成替换；
+也可手动执行：
+
+```bash
+# 新二进制可以是下载到临时目录的发布产物
+sudo eshield upgrade --binary /tmp/eshield-0.5.1 --config /etc/eshield/config.toml
+
+# 指定备份根目录 / 健康检查超时
+sudo eshield upgrade --binary /tmp/eshield-0.5.1 --backup-dir /var/lib/eshield/backup --timeout 30
+
+# 回滚到某个备份目录
+sudo eshield upgrade --rollback /var/lib/eshield/backup/20261031-120000
+```
+
+行为：
+
+1. 校验新二进制（`--version`）与配置（`check --config`，可用 `--skip-config-check` 跳过）；
+2. 备份当前二进制、配置与版本号到 `<backup-dir>/<时间戳>/`；
+3. 停止旧服务（确认进程退出；必要时 SIGKILL），此时 pinned XDP link 仍挂载、防护继续；
+4. 原子安装新二进制（同目录临时文件 + `rename`）；
+5. 启动新服务并轮询 `/ready`（超时 `--timeout`，默认 30s）；
+6. **失败自动回滚**：恢复备份二进制并重启，回滚后再次校验 `/ready`。
+
+`[xdp]` 相关配置：
+
+| 配置 | 说明 |
+|---|---|
+| `persist_link = true`（默认） | 退出时保留 XDP 挂载（fail-closed）；设为 `false` 恢复 v0.5.0 的「退出即卸载」行为。 |
+| `pin_path = "/sys/fs/bpf"` | pinned link 所在的 bpffs 目录；容器内需显式挂载 bpffs。若该路径不可用，进程会尝试 `/run/eshield-bpf`（不存在时自动挂载）。 |
+
+停止服务后如需彻底摘除 XDP 程序：
+
+```bash
+sudo eshield detach --config /etc/eshield/config.toml
+# 等价于：删除 pinned link + ip link set dev <iface> xdp off
 ```
 
 ### 回滚
@@ -254,24 +297,24 @@ Prometheus 告警规则示例：
 groups:
   - name: eshield
     rules:
-      - alert: EShieldMapUsageHigh
+      - alert: XuanArmorMapUsageHigh
         expr: eshield_map_usage_ratio > 0.8
         for: 10m
         labels:
           severity: warning
         annotations:
-          summary: "eShield map {{ $labels.name }} 使用率 {{ $value | humanizePercentage }}"
+          summary: "XuanArmor map {{ $labels.name }} 使用率 {{ $value | humanizePercentage }}"
           description: "LRU 表接近容量，旧条目会被淘汰；检查误封量与阈值，必要时扩容。"
 
-      - alert: EShieldMapUsageCritical
+      - alert: XuanArmorMapUsageCritical
         expr: eshield_map_usage_ratio > 0.95
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: "eShield map {{ $labels.name }} 即将打满（{{ $value | humanizePercentage }}）"
+          summary: "XuanArmor map {{ $labels.name }} 即将打满（{{ $value | humanizePercentage }}）"
 
-      - alert: EShieldFragmentBlocked
+      - alert: XuanArmorFragmentBlocked
         expr: rate(eshield_fragment_blocked_total[5m]) > 100
         for: 10m
         labels:
@@ -279,7 +322,7 @@ groups:
         annotations:
           summary: "分片策略持续命中（policy={{ $labels.policy }}），确认是否为分片攻击或业务 MTU 异常"
 
-      - alert: EShieldPortRateBlocked
+      - alert: XuanArmorPortRateBlocked
         expr: rate(eshield_port_rate_blocked_total[5m]) > 100
         for: 10m
         labels:
@@ -315,7 +358,7 @@ refuse_memory_mb = 256   # 低于该值：拒绝启动
 - **不建议**使用强制启动开关：
 
 ```bash
-# 仅在明确知道后果（400MB 实例装 nginx + eShield 后 sshd 会失联）时使用
+# 仅在明确知道后果（400MB 实例装 nginx + XuanArmor 后 sshd 会失联）时使用
 sudo ESHIELD_ALLOW_LOW_MEMORY=1 systemctl start eshield   # 不推荐
 ```
 

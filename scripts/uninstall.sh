@@ -1,8 +1,8 @@
 #!/bin/bash
-# eShield 卸载脚本
+# XuanArmor 卸载脚本
 set -e
 
-echo "停止并禁用 eShield 服务..."
+echo "停止并禁用 XuanArmor 服务..."
 systemctl stop eshield 2>/dev/null || true
 systemctl disable eshield 2>/dev/null || true
 
@@ -19,4 +19,4 @@ if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
     rm -rf /etc/eshield
 fi
 
-echo "✓ eShield 已卸载"
+echo "✓ XuanArmor 已卸载"

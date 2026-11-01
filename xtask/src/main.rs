@@ -4,7 +4,7 @@ use std::process::Command;
 
 #[derive(Debug, Parser)]
 #[command(name = "cargo xtask")]
-#[command(about = "Build tasks for eShield")]
+#[command(about = "Build tasks for XuanArmor")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -24,7 +24,7 @@ enum Commands {
         #[arg(short, long, default_value = "release")]
         profile: String,
     },
-    /// Build and run eShield start
+    /// Build and run XuanArmor start
     Run {
         /// Network interface
         #[arg(short, long, default_value = "eth0")]

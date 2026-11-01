@@ -128,7 +128,7 @@ start_es() {
         if ip netns exec "$NS_S" curl -sf --max-time 2 "$API/ready" >/dev/null 2>&1; then return 0; fi
         sleep 0.25
     done
-    echo "eShield 启动失败："; tail -20 /tmp/v5.log
+    echo "XuanArmor 启动失败："; tail -20 /tmp/v5.log
     return 1
 }
 

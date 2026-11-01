@@ -21,6 +21,8 @@ mod time;
 mod timeseries;
 mod tui;
 mod web;
+mod xdp_link;
+mod upgrade;
 
 use anyhow::Context;
 use aya::{include_bytes_aligned, maps::HashMap as LruHashMap, programs::Xdp, Ebpf};
@@ -51,6 +53,7 @@ const DEFAULT_ENDPOINT: &str = "http://localhost:8720";
 
 #[derive(Debug, Parser)]
 #[command(name = "eshield")]
+#[command(version)]
 #[command(about = "eBPF/XDP 主机级 CC 防御盾")]
 struct Cli {
     #[command(subcommand)]
@@ -67,7 +70,7 @@ enum Commands {
     },
     /// 查看运行状态
     Status {
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
@@ -81,7 +84,7 @@ enum Commands {
         /// 封禁时长（秒），0 表示永久
         #[arg(short, long, default_value = "0")]
         duration: u64,
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
@@ -92,7 +95,7 @@ enum Commands {
     Unblock {
         /// 要解封的 IPv4 地址
         ip: String,
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
@@ -101,7 +104,7 @@ enum Commands {
     },
     /// 重新加载配置文件
     Reload {
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
@@ -116,7 +119,7 @@ enum Commands {
     },
     /// 启动独立 TUI 仪表盘
     Tui {
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
@@ -125,12 +128,54 @@ enum Commands {
     },
     /// 重置控制台访问令牌
     ResetToken {
-        /// eShield HTTP API 端点
+        /// XuanArmor HTTP API 端点
         #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
         endpoint: String,
         /// API Token（远程访问必填；也可用 ESHIELD_API_TOKEN 环境变量）
         #[arg(long)]
         token: Option<String>,
+    },
+    /// 平滑升级到新二进制：数据面不中断，失败自动回滚
+    Upgrade {
+        /// 新二进制路径
+        #[arg(long)]
+        binary: String,
+        /// 配置文件路径
+        #[arg(short, long, default_value = "/etc/eshield/config.toml")]
+        config: String,
+        /// 安装路径（升级目标）
+        #[arg(long, default_value = "/usr/local/bin/eshield")]
+        install_bin: String,
+        /// 健康检查超时（秒）
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+        /// 不通过 systemd 管理（需配合 --pid，测试/容器环境）
+        #[arg(long)]
+        no_systemd: bool,
+        /// 旧进程 PID（--no-systemd 时必填）
+        #[arg(long)]
+        pid: Option<u32>,
+        /// 新进程日志文件（--no-systemd 时使用）
+        #[arg(long, default_value = "/var/log/eshield/eshield.log")]
+        log_file: String,
+        /// 跳过配置校验（仅测试用）
+        #[arg(long)]
+        skip_config_check: bool,
+        /// 备份根目录
+        #[arg(long, default_value = "/var/lib/eshield/backup")]
+        backup_dir: String,
+        /// 回滚到指定备份目录
+        #[arg(long)]
+        rollback: Option<String>,
+        /// 启动新进程的命令前缀（如 "ip netns exec ns"，测试/容器用）
+        #[arg(long, default_value = "")]
+        exec_prefix: String,
+    },
+    /// 摘除 pinned XDP 挂载（persist_link=true 时服务停止后仍会驻留）
+    Detach {
+        /// 配置文件路径
+        #[arg(short, long, default_value = "/etc/eshield/config.toml")]
+        config: String,
     },
 }
 
@@ -161,6 +206,45 @@ async fn main() -> anyhow::Result<()> {
         Commands::Tui { endpoint, token } => tui::run(endpoint, resolve_token(token)).await,
         Commands::ResetToken { endpoint, token } => {
             send_reset_token(&endpoint, resolve_token(token).as_deref()).await
+        }
+        Commands::Upgrade {
+            binary,
+            config,
+            install_bin,
+            timeout,
+            no_systemd,
+            pid,
+            log_file,
+            skip_config_check,
+            backup_dir,
+            rollback,
+            exec_prefix,
+        } => {
+            let opts = upgrade::UpgradeOptions {
+                binary: binary.into(),
+                config: config.into(),
+                install_bin: install_bin.into(),
+                timeout_s: timeout,
+                no_systemd,
+                pid,
+                log_file: log_file.into(),
+                skip_config_check,
+                backup_root: backup_dir.into(),
+                exec_prefix,
+            };
+            match rollback {
+                Some(dir) => upgrade::rollback(opts, std::path::Path::new(&dir)),
+                None => upgrade::run(opts),
+            }
+        }
+        Commands::Detach { config } => {
+            let cfg = Config::from_file(&config)?;
+            if xdp_link::detach_pinned(&cfg)? {
+                println!("已摘除 {} 上的 XDP 程序", cfg.interface);
+            } else {
+                println!("{} 上没有 XDP 程序", cfg.interface);
+            }
+            Ok(())
         }
     }
 }
@@ -197,7 +281,7 @@ async fn check_config(config_path: &str) -> anyhow::Result<()> {
 
 /// 启动资源预检（v0.5.0）。
 ///
-/// 实测在 400MB 内存实例上，系统 + nginx + eShield 会触发 OOM，连 sshd 都失去响应。
+/// 实测在 400MB 内存实例上，系统 + nginx + XuanArmor 会触发 OOM，连 sshd 都失去响应。
 /// 这里在加载 eBPF 之前给出明确结论，避免"装上了、跑挂了"的现场事故。
 fn preflight_memory(config: &Config) -> anyhow::Result<()> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").unwrap_or_default();
@@ -252,7 +336,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
 
     logging::init_tracing(&config.log_level, config.log_json);
 
-    info!("loading eShield eBPF program");
+    info!("loading XuanArmor eBPF program");
 
     // eBPF 统一使用 release 产物嵌入，避免 debug 构建因 overflow-checks panic 代码导致 bpf-linker 失败
     let mut ebpf = Ebpf::load(include_bytes_aligned!(
@@ -332,72 +416,34 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         }
     };
 
-    let program: &mut Xdp = ebpf
-        .program_mut("eshield")
-        .context("program 'eshield' not found")?
-        .try_into()?;
-    program.load()?;
+    {
+        let program: &mut Xdp = ebpf
+            .program_mut("eshield")
+            .context("program 'eshield' not found")?
+            .try_into()?;
+        program.load()?;
+    }
 
-    // XDP 挂载策略（[xdp]）：
-    //   auto    —— 先 native，失败回退 generic（默认）
-    //   native  —— 只允许 native，失败直接报错退出（避免"以为在跑 native、其实跑 SKB"）
-    //   generic —— 强制 SKB（veth/虚拟网卡或驱动不支持 native）
-    // 兼容旧环境变量 ESHIELD_XDP_MODE=skb|generic|native，优先级高于配置文件。
-    let env_mode = std::env::var("ESHIELD_XDP_MODE")
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let want_mode = match env_mode.as_str() {
-        "skb" | "generic" => "generic".to_string(),
-        "native" | "drv" => "native".to_string(),
-        _ => config.xdp.mode.to_ascii_lowercase(),
-    };
-    let (attached_mode, link_id) = if want_mode == "generic" {
-        info!(
-            "[xdp].mode/ESHIELD_XDP_MODE=generic, attaching SKB on {}",
-            config.interface
-        );
-        let id = program
-            .attach(&config.interface, aya::programs::XdpFlags::SKB_MODE)
-            .with_context(|| format!("failed to attach XDP program on {}", config.interface))?;
-        ("generic", id)
-    } else {
-        let native = {
-            let mut attempt =
-                || program.attach(&config.interface, aya::programs::XdpFlags::DRV_MODE);
-            attach_native_prefer(&mut attempt, &config.interface, config.xdp.disable_offloads)
-        };
-        match native {
-            Ok(id) => ("native", id),
-            Err(last_err) => {
-                let hint = native_attach_hint(&config.interface);
-                if want_mode == "native" {
-                    anyhow::bail!(
-                        "native XDP attach failed on {}: {last_err}；{hint}",
-                        config.interface
-                    );
-                }
-                warn!(
-                    "native XDP attach failed ({last_err}), falling back to generic mode; {hint}"
-                );
-                let id = program
-                    .attach(&config.interface, aya::programs::XdpFlags::SKB_MODE)
-                    .with_context(|| {
-                        format!("failed to attach XDP program on {}", config.interface)
-                    })?;
-                ("generic", id)
-            }
-        }
-    };
+    // XDP 挂载：优先复用上次运行留下的 pinned link（原子替换程序，数据面不中断）；
+    // 否则按 [xdp].mode / ESHIELD_XDP_MODE 重新挂载，并在成功后 pin 以备下次平滑升级。
+    let xdp_state = xdp_link::attach_or_reuse(&mut ebpf, &config)
+        .context("XDP 挂载失败，拒绝在无防护状态下启动")?;
+    let attached_mode = xdp_state.mode;
+    let want_mode = xdp_link::want_mode(&config);
     state.stats.xdp_attached.store(true, Ordering::Relaxed);
     state.stats.xdp_mode.store(
         if attached_mode == "native" { 1 } else { 2 },
         Ordering::Relaxed,
     );
     info!(
-        "attached XDP in {} mode on {} (requested: {})",
-        attached_mode, config.interface, want_mode
+        "attached XDP in {} mode on {} (requested: {}, pinned: {}, reused: {}, replaced_existing: {})",
+        attached_mode,
+        config.interface,
+        want_mode,
+        xdp_state.pinned(),
+        xdp_state.reused,
+        xdp_state.replaced_existing
     );
-    let xdp_link_id = Some(link_id);
 
     // Ebpf 状态由控制面、事件消费任务与热加载共享
     let ebpf = Arc::new(tokio::sync::Mutex::new(ebpf));
@@ -405,12 +451,12 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     // XDP 挂载巡检：程序被驱动重置/外部摘掉时，/ready 立刻降级并自动重挂，
     // 避免"控制台显示运行中、实际已经裸奔"。
     {
-        let iface = config.interface.clone();
         let stats = state.stats.clone();
         let ebpf = ebpf.clone();
         let auto_reattach = config.xdp.auto_reattach;
+        let monitor_cfg = config.clone();
         tokio::spawn(async move {
-            monitor_xdp(iface, stats, ebpf, auto_reattach).await;
+            monitor_xdp(monitor_cfg, stats, ebpf, auto_reattach).await;
         });
     }
 
@@ -519,7 +565,8 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         );
     }
 
-    let _web_handle = {
+    let (web_shutdown_tx, web_shutdown_rx) = tokio::sync::watch::channel(false);
+    let web_handle = {
         let stats = state.stats.clone();
         let control = control.clone();
         let auditor = auditor.clone();
@@ -527,7 +574,14 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         let map_infos = map_infos.clone();
         tokio::spawn(async move {
             if let Err(e) = web::run(
-                stats, control, auditor, auth, web_bind, packet_log, map_infos,
+                stats,
+                control,
+                auditor,
+                auth,
+                web_bind,
+                packet_log,
+                map_infos,
+                web_shutdown_rx,
             )
             .await
             {
@@ -787,21 +841,21 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     let mut sigterm = unix_signal(SignalKind::terminate())?;
 
     info!(
-        "eShield is running on {}, press Ctrl-C to stop, send SIGHUP to reload config",
+        "XuanArmor is running on {}, press Ctrl-C to stop, send SIGHUP to reload config",
         config.interface
     );
 
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
-                info!("shutting down eShield (SIGINT)");
+                info!("shutting down XuanArmor (SIGINT)");
                 auditor
                     .log("system", AuditAction::Stop, serde_json::json!({}), None)
                     .await;
                 break;
             }
             _ = sigterm.recv() => {
-                info!("shutting down eShield (SIGTERM)");
+                info!("shutting down XuanArmor (SIGTERM)");
                 auditor
                     .log("system", AuditAction::Stop, serde_json::json!({}), None)
                     .await;
@@ -816,6 +870,17 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
             }
         }
     }
+
+    // 退出看门狗：任何后台任务卡死都不应阻止进程退出（否则 systemctl stop 会超时）。
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        tracing::error!("shutdown watchdog fired, forcing exit");
+        std::process::exit(1);
+    });
+
+    // 通知 Web 服务停止接受新请求并排空在途请求（平滑升级时控制面尽量无感）
+    let _ = web_shutdown_tx.send(true);
+    let _ = tokio::time::timeout(Duration::from_secs(3), web_handle).await;
 
     event_handle.abort();
     packet_log_handle.abort();
@@ -857,18 +922,11 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         }
     }
 
-    // 优雅退出：显式卸载 XDP 程序，避免 systemd stop / SIGTERM 时留下悬空 XDP 钩子。
-    if let Some(link_id) = xdp_link_id {
+    // XDP 挂载收尾：persist_link=true 时保留 pinned link（升级/重启期间防护不中断），
+    // 否则显式摘除，避免 systemd stop 后留下悬空钩子。
+    {
         let mut guard = ebpf.lock().await;
-        if let Some(prog) = guard.program_mut("eshield") {
-            if let Ok(xdp) = prog.try_into() as Result<&mut Xdp, _> {
-                if let Err(e) = xdp.detach(link_id) {
-                    warn!("failed to detach XDP program: {}", e);
-                } else {
-                    info!("XDP program detached gracefully");
-                }
-            }
-        }
+        xdp_link::shutdown_detach(&mut guard, xdp_state, &config);
     }
 
     Ok(())
@@ -880,12 +938,12 @@ async fn show_status(endpoint: &str, token: Option<&str>) -> anyhow::Result<()> 
         .get(format!("{}/api/stats", endpoint))
         .send()
         .await
-        .context("无法连接 eShield API，守护进程是否已启动？")?
+        .context("无法连接 XuanArmor API，守护进程是否已启动？")?
         .json()
         .await
         .context("解析 API 响应失败")?;
 
-    println!("eShield 运行状态");
+    println!("XuanArmor 运行状态");
     println!("----------------");
     println!(
         "总丢弃包数: {}",
@@ -945,7 +1003,7 @@ async fn send_block(
         .json(&serde_json::json!({ "ip": ip, "duration_s": duration }))
         .send()
         .await
-        .context("无法连接 eShield API")?;
+        .context("无法连接 XuanArmor API")?;
 
     if resp.status().is_success() {
         println!("已封禁 {}，时长 {} 秒", ip, duration);
@@ -962,7 +1020,7 @@ async fn send_unblock(endpoint: &str, ip: &str, token: Option<&str>) -> anyhow::
         .json(&serde_json::json!({ "ip": ip }))
         .send()
         .await
-        .context("无法连接 eShield API")?;
+        .context("无法连接 XuanArmor API")?;
 
     if resp.status().is_success() {
         println!("已解封 {}", ip);
@@ -978,7 +1036,7 @@ async fn send_reload(endpoint: &str, token: Option<&str>) -> anyhow::Result<()> 
         .post(format!("{}/api/config/reload", endpoint))
         .send()
         .await
-        .context("无法连接 eShield API")?;
+        .context("无法连接 XuanArmor API")?;
 
     if resp.status().is_success() {
         println!("配置已重新加载");
@@ -994,7 +1052,7 @@ async fn send_reset_token(endpoint: &str, token: Option<&str>) -> anyhow::Result
         .post(format!("{}/api/auth/reset-token", endpoint))
         .send()
         .await
-        .context("无法连接 eShield API")?;
+        .context("无法连接 XuanArmor API")?;
 
     if resp.status().is_success() {
         let body: serde_json::Value = resp.json().await.context("解析 API 响应失败")?;
@@ -1140,76 +1198,14 @@ fn probe_xdp(iface: &str) -> Option<(String, u32)> {
     Some((name, mode))
 }
 
-/// 尝试关闭 virtio_net 上会导致 native XDP 挂载失败的 offload，返回实际关闭成功的项。
-///
-/// 内核在 `virtnet_xdp_set()` 里检查：宿主机实现 GRO_HW/CSUM 时直接拒绝 native XDP。
-/// 部分云主机允许 guest 关闭，部分显示 `[fixed]` 由宿主机固定开启（此时无解，只能 SKB）。
-fn disable_virtio_offloads(iface: &str) -> Vec<String> {
-    const FEATURES: [&str; 3] = ["rx-gro-hw", "tx-checksum-ip-generic", "tx-checksum-ipv4"];
-    let mut changed = Vec::new();
-    for feature in FEATURES {
-        if let Ok(out) = std::process::Command::new("ethtool")
-            .args(["-K", iface, feature, "off"])
-            .output()
-        {
-            if out.status.success() {
-                changed.push(feature.to_string());
-            }
-        }
-    }
-    changed
-}
-
-/// 尝试 native 挂载；失败时按需关闭 virtio_net offload 再重试一次。
-///
-/// 用泛型 `T`/`E` 承接 `attach()` 的返回值与错误类型，避免在本模块里写死 aya 的
-/// link id / ProgramError 类型（跨 aya 版本更稳）。
-fn attach_native_prefer<F, T, E>(
-    attach: &mut F,
-    iface: &str,
-    disable_offloads: bool,
-) -> Result<T, String>
-where
-    F: FnMut() -> Result<T, E>,
-    E: std::fmt::Display,
-{
-    let first_err = match attach() {
-        Ok(id) => return Ok(id),
-        Err(e) => e.to_string(),
-    };
-
-    if disable_offloads {
-        let changed = disable_virtio_offloads(iface);
-        if !changed.is_empty() {
-            info!(
-                "为支持 native XDP 已关闭 {iface} 的 offload: {}",
-                changed.join(", ")
-            );
-            return attach().map_err(|e| e.to_string());
-        }
-    }
-    Err(first_err)
-}
-
-/// native 挂载失败时的可执行排障提示。
-fn native_attach_hint(iface: &str) -> String {
-    format!(
-        "若网卡是 virtio_net，这是宿主机开启 GRO_HW/CSUM 导致的已知限制：\
-         请检查 `ethtool -k {iface} | grep -E 'rx-gro-hw|tx-checksum'`；\
-         若显示 [fixed] 表示由宿主机固定开启、guest 无法关闭，只能使用 generic 模式\
-         （或改用支持 XDP 的网卡系列，如 AWS ENA / 阿里云弹性网卡 / Intel i40e/ice）。"
-    )
-}
-
-/// 周期性校验 XDP 是否真的挂在内核里；被摘掉时更新状态并（可选）自动重挂。
+/// 周期性校验 XDP 是否真的挂在内核里/// 周期性校验 XDP 是否真的挂在内核里；被摘掉时更新状态并（可选）自动重挂。
 async fn monitor_xdp(
-    iface: String,
+    config: Config,
     stats: Arc<crate::state::Stats>,
     ebpf: Arc<tokio::sync::Mutex<Ebpf>>,
     auto_reattach: bool,
 ) {
-    use aya::programs::XdpFlags;
-
+    let iface = config.interface.clone();
     let mut interval = tokio::time::interval(Duration::from_secs(15));
     interval.tick().await; // 首次 tick 立即返回，跳过
     loop {
@@ -1237,41 +1233,23 @@ async fn monitor_xdp(
                 let Ok(mut guard) = ebpf.try_lock() else {
                     continue;
                 };
-                let Some(prog) = guard.program_mut("eshield") else {
-                    continue;
-                };
-                if let Ok(xdp) = prog.try_into() as Result<&mut Xdp, _> {
-                    let native = {
-                        let mut attempt = || xdp.attach(&iface, XdpFlags::DRV_MODE);
-                        attach_native_prefer(&mut attempt, &iface, true)
-                    };
-                    let attached_mode: Option<&'static str> = match native {
-                        Ok(_id) => Some("native"),
-                        Err(e) => {
-                            warn!("native 重挂失败（{e}），回退 generic 模式");
-                            match xdp.attach(&iface, XdpFlags::SKB_MODE) {
-                                Ok(_id) => Some("generic"),
-                                Err(e2) => {
-                                    tracing::error!("XDP 自动重挂失败: {e2}");
-                                    None
-                                }
-                            }
-                        }
-                    };
-                    if let Some(mode) = attached_mode {
+                match crate::xdp_link::attach_or_reuse(&mut guard, &config) {
+                    Ok(state) => {
                         stats.xdp_attached.store(true, Ordering::Relaxed);
-                        stats
-                            .xdp_mode
-                            .store(if mode == "native" { 1 } else { 2 }, Ordering::Relaxed);
-                        tracing::info!("XDP 已在 {iface} 上自动重新挂载（{mode}）");
+                        stats.xdp_mode.store(
+                            if state.mode == "native" { 1 } else { 2 },
+                            Ordering::Relaxed,
+                        );
+                        tracing::info!("XDP 已在 {iface} 上自动重新挂载（{}）", state.mode);
                     }
+                    Err(e) => tracing::error!("XDP 自动重挂失败: {e}"),
                 }
             }
         }
     }
 }
 
-/// 判断 Web 监听地址是否仅绑定环回（环回上明文 HTTP 风险可接受）。
+/// 判断 Web 监听地址是否仅绑定环回/// 判断 Web 监听地址是否仅绑定环回（环回上明文 HTTP 风险可接受）。
 fn bind_is_loopback(bind: &str) -> bool {
     // 支持 "[::1]:8720"、"127.0.0.1:8720"、"localhost:8720" 以及无端口的裸 IPv6 "::1"
     let host = if let Some(rest) = bind.strip_prefix('[') {

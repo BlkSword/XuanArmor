@@ -1,4 +1,4 @@
-# eShield 开发环境
+# XuanArmor 开发环境
 
 ## 推荐环境
 
@@ -48,7 +48,7 @@ bpf-linker --version
 ip link add dummy-esh type dummy && ip link set dummy-esh up
 sudo ESHIELD_XDP_MODE=skb ./target/x86_64-unknown-linux-musl/release/eshield start \
   --config <(printf 'interface="dummy-esh"\nweb_bind="127.0.0.1:18888"\n')
-# 日志出现 "attaching generic XDP" / "eShield is running on" 即表示 verifier 通过
+# 日志出现 "attaching generic XDP" / "XuanArmor is running on" 即表示 verifier 通过
 ```
 
 ## 构建

@@ -1,5 +1,5 @@
 #!/bin/bash
-# eShield 完整攻防测试脚本
+# XuanArmor 完整攻防测试脚本
 # 在单台机器上用 network namespace + veth 模拟攻防两端
 set -e
 
@@ -27,7 +27,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "=== eShield 完整攻防测试 ==="
+echo "=== XuanArmor 完整攻防测试 ==="
 echo "日期: $(date)"
 echo ""
 
@@ -48,7 +48,7 @@ ip netns exec "$CLIENT_NS" ip link set lo up
 # 确保没有旧持久化规则影响测试
 rm -f /tmp/eshield-attack-test.redb
 
-# 2. 生成 eShield 配置
+# 2. 生成 XuanArmor 配置
 cat > /tmp/eshield-attack-test.toml <<EOF
 interface = "veth-server"
 web_bind = "0.0.0.0:8443"
@@ -84,14 +84,14 @@ PY
 HTTP_PID=$!
 sleep 1
 
-# 4. 启动 eShield
+# 4. 启动 XuanArmor
 ip netns exec "$SERVER_NS" "$ESHIELD_BIN" start --config /tmp/eshield-attack-test.toml >/tmp/eshield-attack-test.log 2>&1 &
 ESHIELD_PID=$!
 
 # 等待就绪
 for i in {1..30}; do
     if ip netns exec "$SERVER_NS" curl -fs "http://${SERVER_IP}:8443/ready" >/dev/null 2>&1; then
-        echo "[ready] eShield 已启动"
+        echo "[ready] XuanArmor 已启动"
         break
     fi
     sleep 0.5

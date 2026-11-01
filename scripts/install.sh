@@ -1,5 +1,5 @@
 #!/bin/bash
-# eShield 一键安装脚本
+# XuanArmor 一键安装脚本
 # 用法:
 #   sudo bash scripts/install.sh           # 从 GitHub Release 下载二进制
 #   sudo bash scripts/install.sh --build   # 从当前源码构建并安装
@@ -51,9 +51,9 @@ USAGE
 done
 
 # GitHub 仓库（与 scripts/publish-release.sh 保持一致；可用 ESHIELD_REPO 覆盖）
-REPO="${ESHIELD_REPO:-BlkSword/eShield}"
+REPO="${ESHIELD_REPO:-BlkSword/XuanArmor}"
 # 优先从环境变量读取版本；未设置时依次尝试 workspace / eshield crate 的 Cargo.toml；最后回退到默认版本。
-DEFAULT_VERSION="0.5.0"
+DEFAULT_VERSION="0.5.1"
 if [ -z "${VERSION:-}" ]; then
     if [ -f "Cargo.toml" ] && grep -qE '^\[workspace\]' Cargo.toml 2>/dev/null; then
         # workspace 根 Cargo.toml 不含 version，版本在 eshield/Cargo.toml
@@ -75,7 +75,7 @@ WEB_PORT=8720
 
 # ── 环境检测 ──
 echo "========================================="
-echo " eShield v${VERSION} 安装程序"
+echo " XuanArmor v${VERSION} 安装程序"
 echo "========================================="
 echo ""
 
@@ -150,7 +150,7 @@ fi
 if ss -tlnp 2>/dev/null | grep -q ":$WEB_PORT "; then
     warn "端口 $WEB_PORT 已被占用:"
     ss -tlnp 2>/dev/null | grep ":$WEB_PORT " | head -3
-    warn "  安装将继续，但 eShield 可能无法绑定该端口"
+    warn "  安装将继续，但 XuanArmor 可能无法绑定该端口"
     warn "  可在 /etc/eshield/config.toml 中修改 web_bind"
 else
     info "端口 $WEB_PORT: 可用"
@@ -191,7 +191,7 @@ fi
 echo ""
 
 build_local() {
-    echo "正在从源码构建 eShield..."
+    echo "正在从源码构建 XuanArmor..."
     if ! command -v rustup >/dev/null 2>&1; then
         echo "错误: 未检测到 rustup，请先安装 Rust"
         exit 1
@@ -201,7 +201,12 @@ build_local() {
     rustup component add rust-src --toolchain "${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" >/dev/null 2>&1 || true
     cargo +"${ESHIELD_EBPF_TOOLCHAIN:-nightly-2026-07-31}" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release
     cargo build --package eshield --target "$TARGET" --release
-    install -m 0755 "target/$TARGET/release/eshield" "$INSTALL_BIN"
+    NEW_BIN="target/$TARGET/release/eshield"
+    if smooth_upgrade "$NEW_BIN"; then
+        info "平滑升级完成（旧进程退出期间 XDP 继续挂载）"
+        exit 0
+    fi
+    install -m 0755 "$NEW_BIN" "$INSTALL_BIN"
 }
 
 BACKUP_ROOT="${ESHIELD_BACKUP_DIR:-/var/lib/eshield/backup}"
@@ -222,7 +227,7 @@ backup_current() {
 }
 
 do_uninstall() {
-    echo "── 卸载 eShield ──"
+    echo "── 卸载 XuanArmor ──"
     if [ "$SKIP_SYSTEMD" != "1" ]; then
         systemctl stop eshield 2>/dev/null || true
         systemctl disable eshield 2>/dev/null || true
@@ -267,7 +272,7 @@ do_rollback() {
 download_release() {
     URL="https://github.com/${REPO}/releases/download/v${VERSION}/eshield-${TARGET}"
     TMP_BIN="$(mktemp /tmp/eshield-download.XXXXXX)"
-    echo "下载 eShield v${VERSION} (${TARGET})..."
+    echo "下载 XuanArmor v${VERSION} (${TARGET})..."
     echo "  $URL"
     # -f：HTTP 错误直接失败（否则 404 的 HTML 会被当成二进制装进 /usr/local/bin）
     if ! curl -fsSL --retry 3 --retry-delay 2 "$URL" -o "$TMP_BIN"; then
@@ -309,8 +314,33 @@ download_release() {
         info "SHA256 校验通过（--sha256）"
     fi
 
+    if smooth_upgrade "$TMP_BIN"; then
+        rm -f "$TMP_BIN"
+        info "平滑升级完成（旧进程退出期间 XDP 继续挂载）"
+        exit 0
+    fi
+
     install -m 0755 "$TMP_BIN" "$INSTALL_BIN"
     rm -f "$TMP_BIN"
+}
+
+# 平滑升级：当前版本若支持 `upgrade` 子命令（v0.5.1+），交给它完成替换 + 健康检查 + 自动回滚；
+# 旧版本不认识该子命令，回退为"停服 → 安装 → 启动"。
+smooth_upgrade() {
+    local new_bin="$1"
+    if [ ! -x "$INSTALL_BIN" ] || ! "$INSTALL_BIN" upgrade --help >/dev/null 2>&1; then
+        return 1
+    fi
+    if [ "$SKIP_SYSTEMD" = "1" ]; then
+        return 1
+    fi
+    info "检测到已安装版本支持平滑升级（数据面不中断），使用 upgrade 子命令"
+    "$INSTALL_BIN" upgrade \
+        --binary "$new_bin" \
+        --config "$INSTALL_CFG" \
+        --install-bin "$INSTALL_BIN" \
+        --backup-dir "$BACKUP_ROOT" \
+        --timeout "${ESHIELD_UPGRADE_TIMEOUT:-30}"
 }
 
 if [ "$ACTION" = "uninstall" ]; then
@@ -324,6 +354,7 @@ fi
 
 # 升级前：停止旧服务并备份（避免覆盖正在运行的二进制）
 if [ -f "$INSTALL_BIN" ]; then
+    UPGRADING=1
     BACKUP_DIR="$(backup_current)"
     info "检测到已安装版本，已备份到：${BACKUP_DIR}"
     if [ "$SKIP_SYSTEMD" != "1" ] && systemctl is-active --quiet eshield 2>/dev/null; then
@@ -441,9 +472,13 @@ else
     systemctl daemon-reload
     systemctl enable eshield
 
-    # 如果已经在运行则热加载配置，否则启动
+    # 升级场景必须 restart（reload 只热加载配置，不会替换正在运行的二进制）
     if systemctl is-active --quiet eshield; then
-        systemctl reload eshield
+        if [ "${UPGRADING:-0}" = "1" ]; then
+            systemctl restart eshield
+        else
+            systemctl reload eshield
+        fi
     else
         systemctl start eshield
     fi
@@ -451,7 +486,7 @@ fi
 
 echo ""
 echo "========================================="
-echo -e " ${GREEN}eShield v${VERSION} 安装完成${NC}"
+echo -e " ${GREEN}XuanArmor v${VERSION} 安装完成${NC}"
 echo "========================================="
 echo ""
 echo "  控制台地址:  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<服务器IP>'):${WEB_PORT}"

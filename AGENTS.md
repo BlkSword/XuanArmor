@@ -1,18 +1,18 @@
-# eShield — AI Agent 项目指南
+# XuanArmor — AI Agent 项目指南
 
-> 本文件面向不了解 eShield 的 AI 编码助手。项目的主要文档和代码注释使用**中文**，因此本指南也使用中文撰写；代码、命令、文件路径和标识符保持原样。
+> 本文件面向不了解 XuanArmor 的 AI 编码助手。项目的主要文档和代码注释使用**中文**，因此本指南也使用中文撰写；代码、命令、文件路径和标识符保持原样。
 
 ---
 
 ## 1. 项目概述
 
-**eShield**（版本 `0.5.0`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
+**XuanArmor**（版本 `0.5.1`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
 
 - **数据面**：用 Rust/Aya 编写的 eBPF 程序挂载在 Linux XDP 钩子上，在包进入内核网络协议栈之前完成过滤/丢弃/挑战。
 - **控制面**：Rust + Tokio + axum，提供 REST API、中文 Web Dashboard、CLI、TUI、审计日志、持久化与告警。
 - **目标产物**：单二进制静态链接（musl），只需要 `eshield` 一个可执行文件即可运行。
 
-> **重要限制**：eShield 是主机级清洗盾，不能突破物理带宽上限；T 级带宽耗尽型攻击需要上游云厂商清洗。SYN Cookie 代理仅支持 IPv4 TCP（降级式挑战：仅 SYN Flood 源进入 Cookie 挑战，正常连接直通）；L7 扫描仅检查 TCP 首包；防护项目按精确 IP 匹配（target_ips 不能为空且至少包含一个 IPv4 目标；CIDR 由控制面展开，下限 /24，IPv6 目标暂不匹配，DEFEND 动作复用全局防御模块并按 `enabled_modules` 位图过滤，未配置模块视为全开）。
+> **重要限制**：XuanArmor 是主机级清洗盾，不能突破物理带宽上限；T 级带宽耗尽型攻击需要上游云厂商清洗。SYN Cookie 代理仅支持 IPv4 TCP（降级式挑战：仅 SYN Flood 源进入 Cookie 挑战，正常连接直通）；L7 扫描仅检查 TCP 首包；防护项目按精确 IP 匹配（target_ips 不能为空且至少包含一个 IPv4 目标；CIDR 由控制面展开，下限 /24，IPv6 目标暂不匹配，DEFEND 动作复用全局防御模块并按 `enabled_modules` 位图过滤，未配置模块视为全开）。
 
 ---
 
@@ -69,12 +69,19 @@
 
 主要模块：
 
-- `main.rs`：CLI（`start` / `status` / `block` / `unblock` / `reload` / `check` / `tui` / `reset-token`）与守护进程启动流程。
+- `main.rs`：CLI（`start` / `status` / `block` / `unblock` / `reload` / `check` / `tui` /
+  `reset-token` / `upgrade` / `detach`）与守护进程启动流程；`--version` 打印版本。
 - `config.rs`：`/etc/eshield/config.toml` 的解析、默认值与校验。
 - `control.rs`：封装所有 eBPF Map 操作、配置热加载、持久化规则恢复。
 - `state.rs`：内存中的统计状态（PPS/DPS、Top 攻击源、Trust Score 分布等）。
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
-- `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）。
+- `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
+  v0.5.1 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
+- `xdp_link.rs`：XDP 挂载生命周期（v0.5.1）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
+  （`[xdp].persist_link`，默认 true），进程退出后旧程序继续过滤，新进程用 `bpf_link_update`
+  原子替换；`pin_path` 不可用时回退 `/run/eshield-bpf`。
+- `upgrade.rs`：`eshield upgrade`（v0.5.1）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
+  `/ready` 健康检查 → 失败自动回滚；支持 `--rollback`、`--no-systemd --pid`、`--exec-prefix`。
 - `auth.rs`：Bearer Token 认证；本机 `127.0.0.1/::1` 自动跳过校验；v0.5.0 起支持 `readonly_token`
   只读角色（仅 GET/HEAD/OPTIONS，写操作 403）与 `GET /api/auth/check` 角色查询。
 - `audit.rs`：审计日志后端（内存 / JSON Lines 文件）；v0.5.0 起文件后端写入
@@ -294,8 +301,9 @@ sudo bash scripts/benchmark.sh
 - `interface` / `web_bind`：XDP 挂载网卡与 Web/API 监听地址（默认 `0.0.0.0:8720`）。
 - `api_token` / `readonly_token`：读写 Token 与只读 Token（v0.5.0）；只读 Token 仅允许 GET/HEAD/OPTIONS。
 - `whitelist` / `blacklist`：启动时加载的静态 CIDR 白名单与永久黑名单。
-- `[xdp]`：XDP 挂载策略（`mode = auto|native|generic`、`disable_offloads`、`auto_reattach`）
-  与 `fragment_policy = pass|rate_limit|drop`（v0.5.0，默认 `rate_limit`，按「协议 + 0 端口」聚合限速）。
+- `[xdp]`：XDP 挂载策略（`mode = auto|native|generic`、`disable_offloads`、`auto_reattach`）、
+  `fragment_policy = pass|rate_limit|drop`（v0.5.0，默认 `rate_limit`，按「协议 + 0 端口」聚合限速）、
+  `persist_link = true`（v0.5.1，退出时保留 XDP 挂载）与 `pin_path = "/sys/fs/bpf"`（pinned link 所在 bpffs）。
 - `[limits]`：启动内存预检（v0.5.0）——`min_memory_mb`（默认 512，告警）、
   `refuse_memory_mb`（默认 256，拒绝启动），`ESHIELD_ALLOW_LOW_MEMORY=1` 可强制启动（不推荐）。
 - `[rate_limit]`：per-IP 速率限制（默认 threshold=2000、封禁 120s；threshold 是"突发信用"，
@@ -387,7 +395,7 @@ docker run -d --name eshield \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/eshield/config.toml:/etc/eshield/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/eshield:v0.5.0
+  ghcr.io/blksword/eshield:v0.5.1
 ```
 
 ### 8.3 分布式 Hub
@@ -451,7 +459,7 @@ sync_rules_enabled = true
   （命中计 `port_rate_blocked`，规则 ID `PORT_RATE=15`）。这是"限速兜底"，不是源 IP 识别。
 - **启动资源预检**：`[limits]`（v0.5.0）在加载 eBPF 前读取 `/proc/meminfo`：低于
   `refuse_memory_mb`（默认 256）拒绝启动，低于 `min_memory_mb`（默认 512）告警。
-  400MB 实例上装 nginx + eShield 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
+  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
 - **防护项目**：按 目的 IPv4 + 端口 + 协议 精确匹配（target_ips 的 CIDR 由控制面展开，下限 /24，IPv6 目标暂不匹配）；PASS/DROP 在数据面生效，DEFEND 按 `enabled_modules` 位图过滤全局防御模块（SYN_FLOOD/UDP_FLOOD/ICMP_FLOOD/RATE_LIMIT/L7_SCAN/GEOIP 已实现，PORT_ACL/TCP_RESET/ADAPTIVE 位保留）。
 - **XDP 挂载**：由 `[xdp].mode` 控制（auto/native/generic，默认 auto）。native 失败时按
   `disable_offloads` 尝试关闭 virtio_net 的 rx-gro-hw/tx-checksum 后重试；仍失败则
@@ -459,6 +467,9 @@ sync_rules_enabled = true
   已知限制：virtio_net 在宿主机开启 GRO_HW/CSUM 时会拒绝 native XDP，`ethtool -k` 显示
   `rx-gro-hw: on [fixed]` 时 guest 侧无解，只能跑 generic（性能显著低于 native）。
   挂载状态由后台任务每 15s 校验：程序被摘掉时 `/ready` 返回 503 并自动重挂。
+  v0.5.1 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
+  彻底卸载用 `eshield detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
+  容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/eshield-bpf`）。
 - **eBPF 构建**：debug 构建因 `overflow-checks` 与未内联代码容易导致 verifier/bpf-linker 失败，因此工作空间默认 `opt-level = 3`；发布构建使用 `panic = abort`、`lto = true`、`strip = true`。
 
 ---
@@ -469,7 +480,7 @@ sync_rules_enabled = true
 |---|---|
 | `README.md` / `README_EN.md` | 项目简介、快速开始、功能列表 |
 | `docs/architecture.md` | 系统架构、数据包旅程、BPF Maps |
-| `docs/capability-boundaries.md` | 能力边界与不承诺项（现象/原因/缓解/计划） |
+| `docs/capability-boundaries.md` | 能力边界与不承诺项（现象/原因/缓解/现状） |
 | `docs/capacity-planning.md` | 容量规划：实测 CPU/内存、推荐规格、估算公式、map 内存与调优 |
 | `docs/deployment.md` | 二进制、systemd、容器、K8s、Hub 部署 |
 | `docs/operations.md` | 日常运维、升级回滚、认证、审计链、map 告警、故障排查 |

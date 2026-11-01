@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build release artifacts for eShield:
+# Build release artifacts for XuanArmor:
 # - static musl binary
 # - eBPF object
 # - DEB / RPM packages (if cargo-deb / cargo-generate-rpm are installed)

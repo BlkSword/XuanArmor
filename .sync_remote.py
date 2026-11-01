@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eShield remote development helper.
+"""XuanArmor remote development helper.
 
 Modes:
   sync   - one-shot incremental sync Windows -> Linux (default)
@@ -285,7 +285,7 @@ def watch(sftp, ssh, local: str, remote: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="eShield remote sync / build / test helper"
+        description="XuanArmor remote sync / build / test helper"
     )
     parser.add_argument(
         "mode",

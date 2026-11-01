@@ -34,7 +34,7 @@ const attackBadge = computed(() => {
           <path d="M8.8 12.1l2.1 2.1 4.3-4.4" stroke-linecap="round" />
         </svg>
       </div>
-      <div class="brand-name">eShield</div>
+      <div class="brand-name">XuanArmor</div>
       <div class="brand-ver">0.4.8</div>
     </div>
     <div class="side-scroll">

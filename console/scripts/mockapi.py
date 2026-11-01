@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local mock of the eShield HTTP API + SPA host, used to verify console wiring.
+"""Local mock of the XuanArmor HTTP API + SPA host, used to verify console wiring.
 
 Usage: python console/scripts/mockapi.py [port] [app_html]
 """
@@ -65,7 +65,7 @@ WHITELIST = {"entries": [{"cidr": "10.0.0.0/8", "note": "内网"}], "count": 1}
 ACL = {"items": [{"protocol": "tcp", "dport": "3306", "action": "deny"}]}
 L7 = {"patterns": [{"pattern": "GET /"}, {"pattern": "eval("}]}
 PROJECTS = {"projects": [{"name": "web-public", "description": "Web", "protocol": "tcp", "dport": "80,443", "target_ips": ["172.23.83.42/32"], "enabled_modules": ["l7_scan"], "action": "defend"}]}
-CONFIG = {"version": "0.5.0", "interface": "eth0", "web_bind": "0.0.0.0:8720", "store_path": "/var/lib/eshield/rules.redb",
+CONFIG = {"version": "0.5.1", "interface": "eth0", "web_bind": "0.0.0.0:8720", "store_path": "/var/lib/eshield/rules.redb",
           "rate_limit_enabled": True, "syn_proxy_enabled": True, "l7_scan_enabled": True, "udp_flood_enabled": True,
           "icmp_flood_enabled": True, "geoip_enabled": False, "geoip_default_action": 0, "conn_track_enabled": False,
           "conn_track_threshold": 100, "conn_track_window_ms": 10000, "trust_enabled": True, "tcp_reset_on_drop": False,

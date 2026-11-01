@@ -1,6 +1,6 @@
 #!/bin/bash
-# eShield XDP 吞吐量基准测试
-# 在 netns 中对比：无 eShield、XDP PASS、XDP DROP 三种场景
+# XuanArmor XDP 吞吐量基准测试
+# 在 netns 中对比：无 XuanArmor、XDP PASS、XDP DROP 三种场景
 set -e
 
 PACKETS="${PACKETS:-200000}"
@@ -79,13 +79,13 @@ main() {
         exit 1
     fi
 
-    echo "=== eShield XDP Benchmark ==="
+    echo "=== XuanArmor XDP Benchmark ==="
     echo "packets: $PACKETS, interval: $INTERVAL"
 
     setup_netns
 
     echo ""
-    run_hping "Baseline (no eShield)"
+    run_hping "Baseline (no XuanArmor)"
 
     write_config ""
     cp target/x86_64-unknown-linux-musl/release/eshield /tmp/eshield

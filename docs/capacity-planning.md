@@ -1,4 +1,4 @@
-# eShield 容量规划与实测数据
+# XuanArmor 容量规划与实测数据
 
 > 版本：v0.5.0（2026-10-31）
 >
@@ -87,7 +87,7 @@
 
 > 说明：p95 恶化主要来自攻击包对协议栈/`ksoftirqd` 的挤压，以及测试业务端
 > `python http.server` 单线程自身的瓶颈；生产环境请用真实业务进程复测。
-> **结论：eShield 保的是"网络层不被彻底打瘫"，不是"攻击期业务延迟不变"。**
+> **结论：XuanArmor 保的是"网络层不被彻底打瘫"，不是"攻击期业务延迟不变"。**
 
 ### 3.4 v0.4.8 实测的绕过面（v0.5.0 的改进依据）
 
@@ -96,7 +96,7 @@
 | 伪造随机源 IP，20k pps | per-IP 黑名单不触发，**全部 PASS**；`RATE_MAP` 被撑到 20000 条上限 | `[port_rate_limit].enabled` 默认 **true**，按协议+端口聚合限速 |
 | IPv4 非首片分片 | 跳过全部 L4 模块，**大部分放行** | `[xdp].fragment_policy` 默认 `rate_limit`（可 `drop`） |
 | 单 IP 500 rps HTTP（CC） | **不触发任何策略**（L3-L4 层看不到应用层特征） | 不解决（能力边界 B1），用端口聚合限速/WAF 兜底 |
-| 400MB 实例装 nginx + eShield | `sshd` 失去响应（TCP 通、banner 不返回） | `[limits]` 启动内存预检 |
+| 400MB 实例装 nginx + XuanArmor | `sshd` 失去响应（TCP 通、banner 不返回） | `[limits]` 启动内存预检 |
 
 ## 4. 推荐规格
 
@@ -190,8 +190,8 @@ LRU Hash 与 LPM Trie 等 map 在**创建时即按容量预分配**，与实际�
 | redb 规则库 | 随持久化规则数量增长，通常 < 10 MB |
 | 审计日志 | 按 `[audit].max_size_mb` 轮转（默认 100MB，保留 3 份历史 `audit.log.1~.3`） |
 
-> 因此"512MB 最小规格"里，eShield 自身约占 125–130MB（map + RSS），
-> 剩余留给 OS 与业务；400MB 实例上装 nginx + eShield 的 OOM 事故见 3.4。
+> 因此"512MB 最小规格"里，XuanArmor 自身约占 125–130MB（map + RSS），
+> 剩余留给 OS 与业务；400MB 实例上装 nginx + XuanArmor 的 OOM 事故见 3.4。
 
 ### 6.3 用 `map-usage` 观测实际占用
 

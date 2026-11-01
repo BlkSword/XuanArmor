@@ -1,10 +1,12 @@
-# eShield
+# XuanArmor
+
+> Formerly eShield; the project was renamed to **XuanArmor** in v0.5.1. The executable, systemd unit, config path (`/etc/eshield`) and `ESHIELD_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
 
 [中文](README.md) | English
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-eShield is a host-level L3-L4 network protection system built on eBPF/XDP. It drops SYN flood, UDP flood, ICMP flood, scanning, and connection-exhaustion traffic before packets enter the Linux network stack. The project is implemented in Rust and includes an eBPF data plane, a userspace control plane, a distributed policy hub, a web console, a CLI, and a TUI.
+XuanArmor is a host-level L3-L4 network protection system built on eBPF/XDP. It drops SYN flood, UDP flood, ICMP flood, scanning, and connection-exhaustion traffic before packets enter the Linux network stack. The project is implemented in Rust and includes an eBPF data plane, a userspace control plane, a distributed policy hub, a web console, a CLI, and a TUI.
 
 ## Console preview
 
@@ -43,13 +45,17 @@ Charts are hand-written SVG components (no ECharts); the console bundle is ~239K
 
 ## 1. Overview
 
-> **v0.5.0 (2026-10-31)**: productization GA gate. Fixes spoofed-source and IPv4 fragment bypasses
+> **v0.5.1 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
+> filtering while the process restarts; the new process replaces it atomically, with no data-plane gap.
+> Adds `eshield upgrade` (backup, health check, automatic rollback), `eshield detach`, SO_REUSEPORT web listener
+> and graceful shutdown.
+> **v0.5.0 (2026-10-31)**: productization and capability completion. Fixes spoofed-source and IPv4 fragment bypasses
 > (per-destination-port rate limiting is now on by default, plus a new `[xdp].fragment_policy`),
 > adds `[rate_limit].block_mode = hard|soft`, startup memory preflight, read-only tokens (RBAC-lite),
 > tamper-evident audit hash chain, and eBPF map usage observability.
 > See [CHANGELOG.md](CHANGELOG.md) and [docs/capability-boundaries.md](docs/capability-boundaries.md).
 
-eShield attaches filtering logic to the XDP hook at the NIC driver layer. Packets are parsed, matched, and dropped before they reach the kernel network stack, preventing malicious traffic from consuming stack, connection-table, and application resources.
+XuanArmor attaches filtering logic to the XDP hook at the NIC driver layer. Packets are parsed, matched, and dropped before they reach the kernel network stack, preventing malicious traffic from consuming stack, connection-table, and application resources.
 
 The system is designed as a **host-level first line of defense** for single hosts, edge nodes, origin servers, game servers, and internal services. It does not replace cloud scrubbing, CDN protection, or carrier-grade DDoS mitigation, and it cannot exceed the physical link bandwidth.
 
@@ -501,14 +507,14 @@ Environment: Linux kernel 7.0, 8 vCPU, netns + veth, `iperf3 -c <server> -t 5 -P
 |---|---:|---|
 | Baseline (no XDP) | 274.44 Gbps | veth memory-copy limit |
 | Minimal XDP_PASS (native) | 12.83 Gbps | veth native XDP bottleneck |
-| eShield PASS (native, no rules) | 11.85 Gbps | about -7.6% vs minimal program |
+| XuanArmor PASS (native, no rules) | 11.85 Gbps | about -7.6% vs minimal program |
 | Minimal XDP_PASS (SKB generic) | 124.62 Gbps | SKB generic is faster on veth |
-| eShield PASS (SKB generic, no rules) | 112.30 Gbps | about -9.9% vs minimal program |
-| eShield PASS (native, modules enabled, no DROP) | 11.81 Gbps | about -0.3% vs empty rules |
+| XuanArmor PASS (SKB generic, no rules) | 112.30 Gbps | about -9.9% vs minimal program |
+| XuanArmor PASS (native, modules enabled, no DROP) | 11.81 Gbps | about -0.3% vs empty rules |
 
 Conclusions:
 
-- veth native XDP is the primary bottleneck in this benchmark. eShield adds approximately 7%-10% overhead relative to a minimal XDP_PASS program.
+- veth native XDP is the primary bottleneck in this benchmark. XuanArmor adds approximately 7%-10% overhead relative to a minimal XDP_PASS program.
 - With large-packet TCP, enabling rate limiting, Trust, connection tracking, and other modules adds less than 1% overhead.
 - At 1500-byte packets, native mode processes approximately 1 Mpps and SKB generic mode approximately 9-10 Mpps.
 - Small-packet, high-pps, and physical NIC line-rate figures require real NIC testing with `xdp-bench` or `pktgen`; the table above cannot be extrapolated.
@@ -530,8 +536,8 @@ Detailed methodology and data are available in [docs/benchmark.md](docs/benchmar
 | Scenario | Measurement |
 |---|---|
 | Per-packet CPU cost (4 vCPU / generic XDP / netns+veth) | UDP PASS ≈ 92 ns/packet; UDP rate-limit+blocklist DROP and SYN flood DROP ≈ 75 ns/packet |
-| 4 vCPU generic, 220k–280k pps | eShield process CPU 2%, ksoftirqd 1.4%–1.8% |
-| 2 vCPU real two-machine, 135k pps / 5.4M packets / 99.9% blocklist drops | eShield CPU 5% (peak 7%), system busy 13%, RSS 48MB, control-plane API 0.5ms |
+| 4 vCPU generic, 220k–280k pps | XuanArmor process CPU 2%, ksoftirqd 1.4%–1.8% |
+| 2 vCPU real two-machine, 135k pps / 5.4M packets / 99.9% blocklist drops | XuanArmor CPU 5% (peak 7%), system busy 13%, RSS 48MB, control-plane API 0.5ms |
 | Normal traffic during attack | p50 unchanged at 3.4ms; p95 8.5ms → 412ms; success rate 96.9% → 75.6% |
 
 Capacity estimate: `cores ≈ peak pps × per-packet cost (75–92ns) / 0.7` (data-plane lower bound;
@@ -588,10 +594,10 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 
 ## 14. Security Boundaries and Limitations
 
-> The full "symptom / cause / mitigation / planned support" list is in
+> The full "symptom / cause / mitigation / current behavior" list is in
 > [docs/capability-boundaries.md](docs/capability-boundaries.md).
 
-- **Host-level protection**: designed for L3-L4 protection on a single host or edge node. Tbps-scale bandwidth exhaustion requires upstream scrubbing or carrier mitigation; eShield cannot exceed the physical link capacity.
+- **Host-level protection**: designed for L3-L4 protection on a single host or edge node. Tbps-scale bandwidth exhaustion requires upstream scrubbing or carrier mitigation; XuanArmor cannot exceed the physical link capacity.
 - **Limited L7 capability**: the L7 module inspects only TCP first-payload fingerprints. It does not perform TCP segment reassembly and does not provide complete application-layer protection against HTTP floods, CC attacks, or slow attacks.
 - **Per-IP blocking can hit NAT users**: `block_mode = "hard"` (default) adds over-limit IPs to the blocklist, which can affect a whole NAT/proxy egress. v0.5.0 adds `block_mode = "soft"`: over-limit packets are dropped without blocking, recovering automatically when traffic falls.
 - **Spoofed sources and fragments**: per-IP counters are ineffective against spoofed source IPs (v0.4.8 measured: 20k pps with random sources bypassed per-IP blocking entirely). Since v0.5.0 `[port_rate_limit]` is on by default and `[xdp].fragment_policy` (default `rate_limit`) handles non-first IPv4 fragments. `rate_limit` requires `[port_rate_limit].enabled = true`.

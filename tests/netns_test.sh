@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# 可用 ESHIELD_TEST_XDP_MODE=skb 让所有 eShield 实例强制 SKB 模式，
+# 可用 ESHIELD_TEST_XDP_MODE=skb 让所有 XuanArmor 实例强制 SKB 模式，
 # 规避 veth/虚拟网卡上原生 XDP_TX 可能触发的内核问题。
 if [ -n "${ESHIELD_TEST_XDP_MODE:-}" ]; then
     export ESHIELD_XDP_MODE="$ESHIELD_TEST_XDP_MODE"
@@ -35,7 +35,7 @@ export CARGO_HOME="${CARGO_HOME:-$CARGO_ROOT/.cargo}"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    echo "=== Building eShield ==="
+    echo "=== Building XuanArmor ==="
     "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
     "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
 fi
@@ -103,7 +103,7 @@ wait_ready() {
         fi
         sleep 0.25
     done
-    echo "WARN: eShield API not ready within 10s"
+    echo "WARN: XuanArmor API not ready within 10s"
     return 1
 }
 
@@ -377,9 +377,9 @@ sleep 1
 rm -f /var/lib/eshield/rules.redb
 
 
-echo "=== Test 5: after stopping eShield, ping should succeed ==="
+echo "=== Test 5: after stopping XuanArmor, ping should succeed ==="
 if ip netns exec eshield-client ping -c 3 -W 2 10.0.0.1 >/dev/null 2>&1; then
-    echo "PASS: traffic restored after stopping eShield"
+    echo "PASS: traffic restored after stopping XuanArmor"
 else
     echo "FAIL: traffic not restored"
     exit 1

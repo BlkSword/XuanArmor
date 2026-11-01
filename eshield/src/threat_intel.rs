@@ -62,7 +62,7 @@ async fn sync_feed(control: &ControlState, feed: &crate::config::ThreatFeed) -> 
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
-        .user_agent("eShield/0.2.0")
+        .user_agent("XuanArmor/0.2.0")
         .build()
         .context("build http client")?;
 

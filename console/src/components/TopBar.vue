@@ -8,7 +8,7 @@ const emit = defineEmits<{ (e: 'toggle-sidebar'): void }>()
 const route = useRoute()
 
 const groupLabel = computed(() => navGroups.find((g) => g.items.some((i) => i.path === route.path))?.label || '控制台')
-const title = computed(() => (route.meta.title as string) || 'eShield')
+const title = computed(() => (route.meta.title as string) || 'XuanArmor')
 
 const xdp = computed(() => {
   const s = store.stats as Record<string, unknown> | null

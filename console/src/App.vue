@@ -57,7 +57,7 @@ onMounted(() => {
   timer = window.setInterval(() => refresh(), 3000)
   window.addEventListener('keydown', onKey)
   window.addEventListener('eshield:saved', () => refresh(true))
-  // Live audit stream is only useful when the console is served by eShield.
+  // Live audit stream is only useful when the console is served by XuanArmor.
   if (location.protocol.startsWith('http')) {
     try {
       es = new EventSource('/api/audit/stream')

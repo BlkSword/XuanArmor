@@ -1,13 +1,13 @@
-# eShield v0.4.6 云内网极限测试报告（2026-10）
+# XuanArmor v0.4.6 云内网极限测试报告（2026-10）
 
 > 被测版本：v0.4.6
 > 报告月份：2026-10
 > 测试形态：云内网三节点（attack1 / attack2 / defense）
-> 数据来源：eShield `/api/stats`、发送侧 pktgen / hping3 / trafgen / wrk 计数、tcpdump 抓包
+> 数据来源：XuanArmor `/api/stats`、发送侧 pktgen / hping3 / trafgen / wrk 计数、tcpdump 抓包
 
 ## 1. 报告概述
 
-本轮测试在云内网三节点环境验证 eShield v0.4.6 在 virtio_net + native XDP（DRV 模式）下的处理能力与主要防护模块行为，覆盖全量 PASS、全量 DROP、双机并发、SYN / UDP / ICMP Flood、conn_track 与 L7 扫描。
+本轮测试在云内网三节点环境验证 XuanArmor v0.4.6 在 virtio_net + native XDP（DRV 模式）下的处理能力与主要防护模块行为，覆盖全量 PASS、全量 DROP、双机并发、SYN / UDP / ICMP Flood、conn_track 与 L7 扫描。
 
 本文所有数字均为实测值。结论按“实测证明”“受环境限制不能外推”“测试工具导致的现象”三类分别表述；本轮未执行的项目在 §5 明确列出，不得作为已测能力引用。
 
@@ -25,7 +25,7 @@
 
 | 配置项 | 值 |
 |---|---|
-| 版本 | eShield v0.4.6 |
+| 版本 | XuanArmor v0.4.6 |
 | 配置文件 | lab.toml |
 | 白名单 | `172.23.83.41/32` |
 | 认证 | `api_token = eshield-test` |
@@ -48,7 +48,7 @@
 
 ### 3.1 全量 PASS / DROP 与双机并发
 
-| 编号 | 用例 | 发送侧 | eShield 实测 | 结果 |
+| 编号 | 用例 | 发送侧 | XuanArmor 实测 | 结果 |
 |---|---|---|---|---|
 | 1 | 单机全 PASS（attack2 20M UDP） | 20,000,000 | total_packets 20,000,037；total_passed 20,000,037；total_dropped 0 | PASS |
 | 2 | 单机全 DROP（attack2 20M UDP + 静态黑名单） | 20,000,000 | total_packets 20,000,030；total_dropped 20,000,000；blacklist_blocked 20,000,000 | DROP |
@@ -63,14 +63,14 @@
 
 ### 3.2 Flood 与 conn_track
 
-| 编号 | 用例 | 发送侧 | eShield 实测 | 结果 |
+| 编号 | 用例 | 发送侧 | XuanArmor 实测 | 结果 |
 |---|---|---|---|---|
 | 5 | SYN Flood（trafgen，attack2） | 20,000,515 SYN / 约 12.6s | 处理 15,767,794；syn_flood_blocked 15,767,577；total_passed 217 | DROP |
 | 6 | UDP Flood（pktgen 20M，udp_flood_enabled=true） | 20,000,000 | total_dropped 19,998,743；首个窗口超阈值后源进入动态黑名单，后续命中 blacklist_blocked；udp_flood_blocked ≈ 0–1 | DROP |
 | 7 | ICMP Flood（8 路 hping3 -1 --flood，8s；防御端每 0.5s 解封一次以反复触发模块） | 12,796,343 | 处理 12,796,368；icmp_flood_blocked 15；blacklist_blocked 12,794,708；icmp_dropped 12,794,723；total_passed 1,645 | DROP |
 | 8 | conn_track（8 路 hping3 -S --flood，8s；threshold=100、window=10s） | 12,771,734 SYN | 处理 11,779,544；conn_track_blocked 11,779,346；total_passed 198；tcp_dropped 11,779,346 | DROP |
 
-用例 5、8 口径说明：发送侧计数与防御端 XDP 处理计数存在差距（SYN 约 423 万、conn_track 约 99 万）。该差距发生在包到达 XDP 之前，无法进一步区分是发送侧丢包还是 defense vNIC 在 XDP 之前的丢弃；两者都属于环境限制，不计入 eShield 的 DROP 统计，也不能据此推算 XDP 的极限处理能力。
+用例 5、8 口径说明：发送侧计数与防御端 XDP 处理计数存在差距（SYN 约 423 万、conn_track 约 99 万）。该差距发生在包到达 XDP 之前，无法进一步区分是发送侧丢包还是 defense vNIC 在 XDP 之前的丢弃；两者都属于环境限制，不计入 XuanArmor 的 DROP 统计，也不能据此推算 XDP 的极限处理能力。
 
 用例 6 说明：UDP Flood 首个窗口超阈值后，源 IP 进入动态黑名单，后续包由黑名单路径丢弃，因此 `udp_flood_blocked` 在极限流量下只有个位数，DROP 量体现在 `blacklist_blocked` / `total_dropped`，符合模块与黑名单的既有交互。
 
@@ -78,7 +78,7 @@
 
 ### 3.3 L7 扫描
 
-| 编号 | 用例 | 发送侧 / 观测 | eShield 实测 | 结果 |
+| 编号 | 用例 | 发送侧 / 观测 | XuanArmor 实测 | 结果 |
 |---|---|---|---|---|
 | 9 | L7 功能验证（pattern="GET /"，防御端 :80 起 python http.server） | 负向 POST 返回 HTTP 501 | l7_blocked 增量 0 | 负向不误杀 |
 | 9 | 同上 | 正向 wrk 持续 GET，完成请求 0 | l7_blocked 140；tcp_dropped 140；握手 total_passed 87 | 正向命中 DROP |
@@ -101,7 +101,7 @@
 
 ### 4.1 实测证明
 
-- eShield v0.4.6 在 virtio_net + native XDP（DRV 模式）下单机可稳定处理约 1.5–2M pps，双机聚合约 3.1M pps。
+- XuanArmor v0.4.6 在 virtio_net + native XDP（DRV 模式）下单机可稳定处理约 1.5–2M pps，双机聚合约 3.1M pps。
 - 全量 DROP / PASS、SYN / UDP / ICMP Flood、conn_track、L7 扫描均按预期生效；各用例 `/api/stats` 计数与发送侧、抓包观测自洽。
 - 测试期间未出现进程 panic、XDP 掉挂或统计明显错乱。
 - 动态黑名单与 Flood 模块的联动按设计工作：首窗口由模块触发，后续包由黑名单丢弃。

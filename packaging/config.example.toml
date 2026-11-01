@@ -1,4 +1,4 @@
-# eShield 配置文件示例（v0.5.0）
+# XuanArmor 配置文件示例（v0.5.0）
 # 安装后通常位于 /etc/eshield/config.toml
 #
 # 注意：TOML 中表头（[xxx]）之后的所有键值都属于该表，直到下一个表头。
@@ -92,10 +92,17 @@ auto_reattach = true        # 每 15s 校验挂载状态，被摘掉时自动重
 # 注意：rate_limit 依赖 [port_rate_limit].enabled = true；若关闭端口聚合限速，分片等同 pass。
 fragment_policy = "rate_limit"
 
+# 平滑升级（v0.5.1）：进程退出时不摘除 XDP 程序（fail-closed），旧程序继续过滤，
+# 新进程启动时由内核原子替换，升级期间数据面不中断。
+# 需要显式卸载时执行 `eshield detach`；设为 false 则恢复「退出即卸载」的旧行为。
+persist_link = true
+# pinned link 所在 bpffs 目录（默认 /sys/fs/bpf；容器内需挂载 bpffs）
+pin_path = "/sys/fs/bpf"
+
 # ── 启动资源预检 ─────────────────────────────────────────────────────
 
 # 启动资源预检（v0.5.0）：避免在过小规格机器上"装上就跑、跑着被 OOM"。
-# 背景：实测 400MB 内存实例装 nginx + eShield 后 sshd 失去响应（TCP 通但 banner 不返回）。
+# 背景：实测 400MB 内存实例装 nginx + XuanArmor 后 sshd 失去响应（TCP 通但 banner 不返回）。
 # 内存构成：eBPF map 约 75–82MB（按容量预分配）+ 进程 RSS 约 48MB + 业务进程。
 [limits]
 min_memory_mb = 512         # 低于该值：启动时打印告警（建议 >= 1GB）

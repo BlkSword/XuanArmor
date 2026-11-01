@@ -1,4 +1,4 @@
-# eShield GitHub Release 发布脚本（PowerShell）
+# XuanArmor GitHub Release 发布脚本（PowerShell）
 # 用法：
 #   $env:GH_TOKEN = "ghp_xxx"
 #   .\scripts\publish-release.ps1
@@ -9,7 +9,7 @@
 #   3. 默认产物为 target/x86_64-unknown-linux-musl/release/eshield 和
 #      target/bpfel-unknown-none/release/eshield；也可通过 $env:ASSET_DIR 指定目录
 
-$Repo = "BlkSword/eShield"
+$Repo = "BlkSword/XuanArmor"
 $VersionLine = Get-Content eshield/Cargo.toml | Select-String -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
 if (-not $VersionLine) {
     Write-Host "错误：无法从 eshield/Cargo.toml 读取版本号" -ForegroundColor Red
@@ -91,13 +91,13 @@ foreach ($Line in $Lines) {
 $Body = $BodyLines -join "`n"
 if ([string]::IsNullOrWhiteSpace($Body)) {
     Write-Host "警告：未从 CHANGELOG.md 提取到 $Tag 内容，使用默认说明"
-    $Body = "eShield $Tag release."
+    $Body = "XuanArmor $Tag release."
 }
 
 Write-Host "==> 创建 GitHub Release $Tag"
 $ReleaseData = @{
     tag_name = $Tag
-    name = "eShield $Tag"
+    name = "XuanArmor $Tag"
     body = $Body
     draft = $false
     prerelease = $false

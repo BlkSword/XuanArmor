@@ -1,4 +1,4 @@
-# eShield 0.4.7 全量功能测试报告（2026-10-11）
+# XuanArmor 0.4.7 全量功能测试报告（2026-10-11）
 
 > 被测版本：v0.4.7（从 `main` 9437c5f 本地构建，含独立登录页修复）
 > 测试形态：4 台云主机（1 防御 + 3 攻击），同 VPC 私网互通
@@ -14,7 +14,7 @@
 | atk2 | 47.76.102.207 / 172.23.83.42 | 8 vCPU / 14 GB / 20 GB | 7.0.0-31 / virtio_net |
 | atk3 | 47.76.34.233 / 172.23.83.41 | 8 vCPU / 14 GB / 20 GB | 7.0.0-31 / virtio_net |
 
-- 防御端：eShield v0.4.7（`main` 9437c5f 本地构建），`ESHIELD_XDP_MODE=skb`（generic XDP），`web_bind=0.0.0.0:8720`，`api_token=eshield-test`。
+- 防御端：XuanArmor v0.4.7（`main` 9437c5f 本地构建），`ESHIELD_XDP_MODE=skb`（generic XDP），`web_bind=0.0.0.0:8720`，`api_token=eshield-test`。
 - 管理白名单：`8.149.100.136/32`（本地出口）+ `172.23.83.41/32`（atk3，保留恢复通道）；atk1/atk2 为被测攻击源。
 - 攻击工具：pktgen（内核模块，8 线程）、hping3、trafgen、scapy、wrk、iperf3、stress-ng、tcpdump。
 - 私网基线：RTT 0.1–0.2 ms；iperf3 单机 4 流 TCP 约 15.8 Gbps。
@@ -98,7 +98,7 @@
 ### 3.8 混合 soak（3.7 分钟）
 
 - atk1 循环 pktgen 200k/轮，期间每 15s 写 API、每 45s SIGHUP；共处理 **35,800,315 包**（约 162k pps 含间隔）。
-- eShield RSS 48,652–48,768 KB（漂移 116 KB）、fd 38–38、进程存活、XDP 保持 attach；管理请求全程可用。
+- XuanArmor RSS 48,652–48,768 KB（漂移 116 KB）、fd 38–38、进程存活、XDP 保持 attach；管理请求全程可用。
 - 尚不足以证明 6h/24h 长稳，但短时无内存/句柄增长。
 
 ## 4. 发现的问题

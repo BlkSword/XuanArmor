@@ -33,7 +33,7 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    echo "=== Building eShield ==="
+    echo "=== Building XuanArmor ==="
     "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
     "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
 fi
@@ -99,7 +99,7 @@ ESHIELD_PID=$!
 sleep 3
 
 if ! ip netns exec "$NS_SERVER" curl -sf --max-time 3 "http://${WEB}/api/stats" > /tmp/sc-before.json; then
-    echo "FAIL: eShield API not reachable; log:"
+    echo "FAIL: XuanArmor API not reachable; log:"
     tail -20 "$LOG"
     exit 1
 fi

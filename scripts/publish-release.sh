@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-# eShield GitHub Release 发布脚本
+# XuanArmor GitHub Release 发布脚本
 # 用法：
 #   export GH_TOKEN=ghp_xxx
 #   bash scripts/publish-release.sh
@@ -12,7 +12,7 @@ set -euo pipefail
 #   3. 默认产物为 target/x86_64-unknown-linux-musl/release/eshield 和
 #      target/bpfel-unknown-none/release/eshield；也可通过 ASSET_DIR 环境变量指定目录
 
-REPO="BlkSword/eShield"
+REPO="BlkSword/XuanArmor"
 VERSION=$(grep -m1 '^version' eshield/Cargo.toml | sed 's/.*"\([^"]*\)".*/\1/')
 TAG="v${VERSION}"
 # 与 v0.4.6/v0.4.7 的 release 资产格式保持一致（由 scripts/build-release.sh 产出）
@@ -48,7 +48,7 @@ echo "==> 从 CHANGELOG.md 提取 $TAG 发布说明"
 BODY=$(awk "/^## ${VERSION}/{flag=1;next}/^## /{flag=0}flag" CHANGELOG.md | sed 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
 if [ -z "$BODY" ]; then
     echo "警告：未从 CHANGELOG.md 提取到 $TAG 内容，使用默认说明"
-    BODY="eShield $TAG release."
+    BODY="XuanArmor $TAG release."
 fi
 
 echo "==> 创建 GitHub Release $TAG"
@@ -57,7 +57,7 @@ RESPONSE=$(curl -s -X POST \
     -H "Accept: application/vnd.github.v3+json" \
     -H "Content-Type: application/json" \
     "https://api.github.com/repos/$REPO/releases" \
-    -d "{\"tag_name\":\"$TAG\",\"name\":\"eShield $TAG\",\"body\":\"$BODY\",\"draft\":false,\"prerelease\":false}")
+    -d "{\"tag_name\":\"$TAG\",\"name\":\"XuanArmor $TAG\",\"body\":\"$BODY\",\"draft\":false,\"prerelease\":false}")
 
 UPLOAD_URL=$(echo "$RESPONSE" | grep -o '"upload_url": *"[^"]*' | sed 's/"upload_url": *"//;s/{?name,label}$//' | head -1)
 if [ -z "$UPLOAD_URL" ]; then

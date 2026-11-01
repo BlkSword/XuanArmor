@@ -1,13 +1,15 @@
-# eShield
+# XuanArmor
+
+> 原名 eShield，自 v0.5.1 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/eshield`）与 `ESHIELD_*` 环境变量保持不变，既有部署与升级路径不受影响。
 
 [English](README_EN.md) | 中文
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/BlkSword/eShield)](https://github.com/BlkSword/eShield/releases)
+[![Release](https://img.shields.io/github/v/release/BlkSword/XuanArmor)](https://github.com/BlkSword/XuanArmor/releases)
 [![Rust](https://img.shields.io/badge/rust-1.8x%20%2B%20nightly--2026--07--31-orange)](https://www.rust-lang.org/)
 [![eBPF/XDP](https://img.shields.io/badge/eBPF-XDP-6f42c1)](https://www.iovisor.org/technology/xdp)
 
-eShield 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 Linux 内核网络协议栈之前拦截 SYN Flood、UDP Flood、ICMP Flood、扫描探测与连接耗尽类流量。项目由 Rust 实现，包含 eBPF 数据面、用户态控制面、分布式策略 Hub、Web 控制台、CLI 与 TUI。
+XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 Linux 内核网络协议栈之前拦截 SYN Flood、UDP Flood、ICMP Flood、扫描探测与连接耗尽类流量。项目由 Rust 实现，包含 eBPF 数据面、用户态控制面、分布式策略 Hub、Web 控制台、CLI 与 TUI。
 
 ## 控制台预览
 
@@ -54,12 +56,15 @@ eShield 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 Lin
 
 ## 1. 项目概述
 
-> **v0.5.0（2026-10-31）**：产品化 GA 门禁。修复伪造源 IP 与 IPv4 分片绕过（默认开启按目的端口聚合
+> **v0.5.1（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
+> 新进程启动时原子替换，升级/重启期间数据面不中断；新增 `eshield upgrade`（备份、健康检查、失败回滚）与
+> `eshield detach`；Web 监听支持 `SO_REUSEPORT` 并优雅关闭。
+> **v0.5.0（2026-10-31）**：产品化与能力补齐。修复伪造源 IP 与 IPv4 分片绕过（默认开启按目的端口聚合
 > 限速、新增 `[xdp].fragment_policy` 分片策略）、新增 `[rate_limit].block_mode = hard|soft` 软封禁、
 > 启动内存预检、只读 Token（RBAC-lite）、审计哈希链防篡改、map 水位可观测。
 > 完整变更见 [CHANGELOG.md](CHANGELOG.md)，能力边界见 [docs/capability-boundaries.md](docs/capability-boundaries.md)。
 
-eShield 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包在进入内核协议栈之前完成解析、规则匹配与丢弃决策，避免恶意流量消耗协议栈、连接表和应用进程资源。
+XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包在进入内核协议栈之前完成解析、规则匹配与丢弃决策，避免恶意流量消耗协议栈、连接表和应用进程资源。
 
 系统定位为**主机级第一道防线**，适用于单机、边缘节点、源站、游戏服务器与内部服务等场景。系统不替代云清洗、CDN 或运营商级 DDoS 清洗设备，无法突破物理链路带宽上限。
 
@@ -104,12 +109,13 @@ eShield 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包在�
 | 能力 | 说明 |
 |---|---|
 | Web 控制台 | Vue 3 + TypeScript 单文件 SPA（`console/`），跟随系统亮/暗色，文本导航、命令面板与高密度表格。 |
-| CLI 与 TUI | `eshield start/status/block/unblock/reload/check/tui/reset-token`。 |
+| CLI 与 TUI | `eshield start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach`。 |
 | 配置热加载 | 通过 `SIGHUP` 或 `systemctl reload` 重新加载配置。 |
 | 认证与 RBAC-lite | 可选 Bearer Token；v0.5.0 新增只读 Token（只允许 GET/HEAD），本机回环请求跳过 Token 校验。 |
 | 持久化 | 动态规则与时序指标写入 redb，进程重启后恢复。 |
 | 审计 | 内存或 JSON Lines 审计后端（带 `seq`/`prev_hash`/`hash` 哈希链），支持 SSE 实时流、CSV 导出与 `GET /api/audit/verify` 防篡改校验。 |
 | 指标 | Prometheus `/metrics`、JSON `/api/stats`、map 水位 `/api/map-usage`。 |
+| 平滑升级 | 进程退出时保留 XDP 挂载，升级/重启期间数据面不中断；`eshield upgrade` 自动备份、健康检查与失败回滚。 |
 | 安装与生命周期 | `scripts/install.sh` 支持 `--version`、`--sha256`、`--rollback`、`--uninstall`，升级前自动备份。 |
 | 告警 | 支持 Webhook 告警与阈值、冷却时间配置。 |
 | 分布式策略 | Hub 聚合多节点策略；支持 master token 与每节点 Token。 |
@@ -189,12 +195,17 @@ sudo bash scripts/install.sh --build
 4. 创建默认配置 `/etc/eshield/config.toml`（升级时不会覆盖已有配置）。
 5. 安装并启用 systemd 服务。
 
-升级、回滚与卸载（v0.5.0）：
+升级、回滚与卸载（v0.5.1）：
 
 ```bash
+# 已安装 v0.5.1+ 时，install.sh 会调用 eshield upgrade：
+#   旧进程退出期间 XDP 保持挂载，新进程启动时原子替换程序；健康检查失败自动回滚。
+# 也可直接使用 CLI（同一流程）：
+sudo eshield upgrade --binary /path/to/new/eshield --config /etc/eshield/config.toml
+
 # 升级到指定版本；升级前自动备份到 /var/lib/eshield/backup/<时间戳>/
-sudo bash scripts/install.sh --version 0.5.0
-sudo bash scripts/install.sh --version 0.5.0 --sha256 <官方 SHA256>
+sudo bash scripts/install.sh --version 0.5.1
+sudo bash scripts/install.sh --version 0.5.1 --sha256 <官方 SHA256>
 
 # 回滚到最近一次备份（或指定备份目录）
 sudo bash scripts/install.sh --rollback
@@ -314,7 +325,7 @@ ESHIELD_XDP_MODE=skb sudo eshield start --config /etc/eshield/config.toml
 | `api_token` | 读写 Bearer Token；未设置时生成随机 Token。 |
 | `readonly_token` | **v0.5.0**：只读 Token，仅允许 GET/HEAD/OPTIONS，写操作 403。 |
 | `whitelist` / `blacklist` | 启动时加载的静态 CIDR 白名单与永久黑名单。 |
-| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）与分片策略 `fragment_policy`（v0.5.0）。 |
+| `[xdp]` | XDP 挂载策略（`mode`、`disable_offloads`、`auto_reattach`）、分片策略 `fragment_policy`（v0.5.0）与平滑升级相关 `persist_link`/`pin_path`（v0.5.1）。 |
 | `[limits]` | **v0.5.0**：启动内存预检（`min_memory_mb` 告警、`refuse_memory_mb` 拒绝启动）。 |
 | `[rate_limit]` | per-IP 指数衰减速率限制、触发封禁时长与 `block_mode`（hard/soft，v0.5.0）。 |
 | `[port_rate_limit]` | 按协议与目的端口的固定窗口限速，**v0.5.0 起默认开启**。 |
@@ -531,14 +542,14 @@ eshield tui
 |---|---:|---|
 | Baseline（无 XDP） | 274.44 Gbps | veth 本机内存拷贝上限 |
 | 最小 XDP_PASS 程序（原生模式） | 12.83 Gbps | veth 原生 XDP 自身瓶颈 |
-| eShield PASS（原生模式，空规则） | 11.85 Gbps | 相对最小程序约 -7.6% |
+| XuanArmor PASS（原生模式，空规则） | 11.85 Gbps | 相对最小程序约 -7.6% |
 | 最小 XDP_PASS 程序（SKB 通用模式） | 124.62 Gbps | 通用模式在 veth 上更快 |
-| eShield PASS（SKB 通用模式，空规则） | 112.30 Gbps | 相对最小程序约 -9.9% |
-| eShield PASS（原生模式，模块启用但不触发 DROP） | 11.81 Gbps | 相对空规则约 -0.3% |
+| XuanArmor PASS（SKB 通用模式，空规则） | 112.30 Gbps | 相对最小程序约 -9.9% |
+| XuanArmor PASS（原生模式，模块启用但不触发 DROP） | 11.81 Gbps | 相对空规则约 -0.3% |
 
 基准结论：
 
-- veth 原生 XDP 是主要瓶颈，eShield 程序相对最小 XDP_PASS 程序增加约 7%–10% 开销。
+- veth 原生 XDP 是主要瓶颈，XuanArmor 程序相对最小 XDP_PASS 程序增加约 7%–10% 开销。
 - 大包 TCP 场景下，启用速率限制、Trust、连接跟踪等模块后额外开销低于 1%。
 - 大包 1500B 下，原生模式约 1 Mpps，SKB 通用模式约 9–10 Mpps。
 - 小包、高 pps 与物理网卡线速必须通过真实网卡、`xdp-bench` 或 `pktgen` 复测，不能由本表推算。
@@ -562,8 +573,8 @@ v0.5.0 的实测单包成本、真实两机攻击数据、内存占用与容量�
 | 场景 | 实测 |
 |---|---|
 | 单包 CPU 成本（4 vCPU / generic XDP / netns+veth） | UDP PASS ≈ 92 ns/包；UDP 限速+黑名单 DROP / SYN Flood DROP ≈ 75 ns/包 |
-| 4 vCPU generic，22 万~28 万 pps | eShield 进程 CPU 2%，ksoftirqd 1.4~1.8% |
-| 2 vCPU 真实两机，135k pps / 540 万包 / 99.9% 黑名单丢弃 | eShield CPU 5%（峰值 7%）、系统繁忙 13%、RSS 48MB、API 0.5ms |
+| 4 vCPU generic，22 万~28 万 pps | XuanArmor 进程 CPU 2%，ksoftirqd 1.4~1.8% |
+| 2 vCPU 真实两机，135k pps / 540 万包 / 99.9% 黑名单丢弃 | XuanArmor CPU 5%（峰值 7%）、系统繁忙 13%、RSS 48MB、API 0.5ms |
 | 攻击期正常流量 | p50 3.4ms 不变；p95 8.5ms → 412ms；成功率 96.9% → 75.6% |
 
 容量估算：`所需核数 ≈ 峰值 pps × 单包成本(75~92ns) / 0.7`（数据面理论下限，另加控制面与业务开销）；
@@ -632,10 +643,10 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 
 ## 14. 安全边界与限制
 
-> 完整的「现象 / 原因 / 缓解 / 是否计划支持」清单见
+> 完整的「现象 / 原因 / 缓解 / 现状」清单见
 > [docs/capability-boundaries.md](docs/capability-boundaries.md)。
 
-- **主机级防护**：面向单机或边缘节点的 L3-L4 防护。T 级带宽耗尽型攻击需要上游云清洗或运营商清洗，eShield 无法突破物理链路上限。
+- **主机级防护**：面向单机或边缘节点的 L3-L4 防护。T 级带宽耗尽型攻击需要上游云清洗或运营商清洗，XuanArmor 无法突破物理链路上限。
 - **L7 能力有限**：当前 L7 模块仅检查 TCP 首包指纹，不支持 TCP 分段重组，不提供 HTTP Flood、CC 或慢速攻击的完整应用层防御。
 - **单 IP 粒度封禁**：`block_mode = "hard"`（默认）会把触发限速的 IP 写入黑名单，NAT 出口/共享代理上会连带整段出口；
   v0.5.0 新增 `block_mode = "soft"`：超限只丢包、不拉黑，流量回落自动恢复。
@@ -647,7 +658,7 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 - **防护项目范围**：数据面仅匹配 IPv4 精确 IP，CIDR 由控制面展开，下限 `/24`，项目上限 8192 条。
 - **规则容量限制**：`port_acl` 上限 32 条，`l7_scan.patterns` 上限 8 条，用于满足内核 7.0 verifier 的指令处理限制。
 - **最小内存规格**：`[limits].refuse_memory_mb`（默认 256MB）以下拒绝启动，`min_memory_mb`（默认 512MB）以下告警；
-  400MB 实例上装 nginx + eShield 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
+  400MB 实例上装 nginx + XuanArmor 会导致 sshd 失联，不要用 `ESHIELD_ALLOW_LOW_MEMORY=1` 长期绕过。
 - **虚拟网卡限制**：veth 等虚拟网卡的原生 XDP_TX 存在内核异常风险，测试环境应使用 `ESHIELD_XDP_MODE=skb`。
 - **平台限制**：不支持 Windows；不支持无 BTF 的内核。
 - **物理网卡基准缺失**：当前公开基准基于 veth，物理网卡、多队列、小包 pps 与延迟需在目标环境实测。
@@ -659,7 +670,7 @@ cargo +nightly-2026-07-31 clippy --package eshield-ebpf \
 |---|---|
 | [docs/user-guide.md](docs/user-guide.md) | 运维与安全人员使用手册。 |
 | [docs/architecture.md](docs/architecture.md) | 系统架构、数据包旅程与 BPF Maps。 |
-| [docs/capability-boundaries.md](docs/capability-boundaries.md) | **能力边界与不承诺项**（现象/原因/缓解/计划）。 |
+| [docs/capability-boundaries.md](docs/capability-boundaries.md) | **能力边界与不承诺项**（现象/原因/缓解/现状）。 |
 | [docs/capacity-planning.md](docs/capacity-planning.md) | **容量规划**：实测 CPU/内存、推荐规格、估算公式、map 内存与调优。 |
 | [docs/deployment.md](docs/deployment.md) | 二进制、systemd、容器、K8s 与 Hub 部署。 |
 | [docs/operations.md](docs/operations.md) | 日常操作、升级回滚、认证、审计链、map 告警与故障排查。 |

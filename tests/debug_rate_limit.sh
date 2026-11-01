@@ -68,7 +68,7 @@ sleep 3
 echo "=== Baseline ping ==="
 ip netns exec eshield-client ping -c 1 -W 2 10.0.0.1 || true
 
-echo "=== eShield log ==="
+echo "=== XuanArmor log ==="
 tail -n 60 "$ESHIELD_LOG"
 
 kill $ESHIELD_PID 2>/dev/null || true

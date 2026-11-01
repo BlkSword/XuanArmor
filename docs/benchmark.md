@@ -1,4 +1,4 @@
-# eShield 基准测试
+# XuanArmor 基准测试
 
 ## 环境要求
 
@@ -27,9 +27,9 @@ PACKETS=500000 INTERVAL=u1 sudo -E bash scripts/benchmark.sh
 
 ## 测试场景
 
-1. **Baseline**：netns 已建立，但无 eShield 运行，测量原生 veth 转发/丢弃开销。
-2. **XDP PASS**：eShield 已挂载，但无任何规则触发 DROP，测量 XDP 程序自身开销。
-3. **XDP DROP**：eShield 将源 IP 加入黑名单，测量 XDP 早期 DROP 路径。
+1. **Baseline**：netns 已建立，但无 XuanArmor 运行，测量原生 veth 转发/丢弃开销。
+2. **XDP PASS**：XuanArmor 已挂载，但无任何规则触发 DROP，测量 XDP 程序自身开销。
+3. **XDP DROP**：XuanArmor 将源 IP 加入黑名单，测量 XDP 早期 DROP 路径。
 
 ## 指标
 
@@ -39,10 +39,10 @@ PACKETS=500000 INTERVAL=u1 sudo -E bash scripts/benchmark.sh
 ## 示例报告
 
 ```text
-=== eShield XDP Benchmark ===
+=== XuanArmor XDP Benchmark ===
 packets: 200000, interval: u1
 
---- Baseline (no eShield) ---
+--- Baseline (no XuanArmor) ---
   packets: 200000, time: 0.823s, pps: 243013
 
 --- XDP PASS (no drop rules) ---
@@ -63,14 +63,14 @@ packets: 200000, interval: u1
 |---|---:|---|
 | Baseline（无 XDP） | 274.44 Gbps | veth 本机内存拷贝上限 |
 | 最小 XDP_PASS 程序（原生模式） | 12.83 Gbps | veth 原生 XDP 自身瓶颈 |
-| eShield PASS（原生模式，空规则） | 11.85 Gbps | 相对最小程序约 -7.6% |
+| XuanArmor PASS（原生模式，空规则） | 11.85 Gbps | 相对最小程序约 -7.6% |
 | 最小 XDP_PASS 程序（SKB 通用模式） | 124.62 Gbps | 通用模式在 veth 上更快 |
-| eShield PASS（SKB 通用模式，空规则） | 112.30 Gbps | 相对最小程序约 -9.9% |
-| eShield PASS（原生 + 全部模块启用但不触发 DROP） | 11.81 Gbps | 相对空规则约 -0.3% |
+| XuanArmor PASS（SKB 通用模式，空规则） | 112.30 Gbps | 相对最小程序约 -9.9% |
+| XuanArmor PASS（原生 + 全部模块启用但不触发 DROP） | 11.81 Gbps | 相对空规则约 -0.3% |
 
 结论：
 
-- 本基准中 **veth 原生 XDP 本身是主要瓶颈**，eShield 程序相对最小 XDP_PASS
+- 本基准中 **veth 原生 XDP 本身是主要瓶颈**，XuanArmor 程序相对最小 XDP_PASS
   只增加约 7%–10% 开销；
 - 大包 TCP 场景下，开启速率限制 / Trust / 连接跟踪等模块后额外开销很小；
 - 小包 / 高 pps 场景需要真实物理网卡 + `xdp-bench`/`pktgen` 复测，不能直接

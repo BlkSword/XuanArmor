@@ -63,7 +63,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           BODY=$(awk "/^## ${VERSION}/{flag=1;next}/^## /{flag=0}flag" CHANGELOG.md)
           if [ -z "$BODY" ]; then
-            BODY="eShield ${GITHUB_REF_NAME} release."
+            BODY="XuanArmor ${GITHUB_REF_NAME} release."
           fi
           {
             echo "body<<EOF"
@@ -74,7 +74,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: eShield ${{ github.ref_name }}
+          name: XuanArmor ${{ github.ref_name }}
           body: ${{ steps.changelog.outputs.body }}
           files: dist/*
           draft: false

@@ -1,6 +1,6 @@
-# eShield Console
+# XuanArmor Console
 
-eShield 控制台前端工程。Vue 3 + TypeScript + Vite，构建产物是**单文件 HTML**，
+XuanArmor 控制台前端工程。Vue 3 + TypeScript + Vite，构建产物是**单文件 HTML**，
 由 `eshield/src/web.rs` 通过 `include_str!("../web/app.html")` 嵌入二进制。
 
 ## 技术选型
@@ -71,7 +71,7 @@ cp console/dist/index.html eshield/web/app.html
 
 `src/api/client.ts` 自动判断：
 
-- 通过 eShield 服务访问（http/https）：调用真实 `/api/*`，登录态用 `eshield-token`
+- 通过 XuanArmor 服务访问（http/https）：调用真实 `/api/*`，登录态用 `eshield-token`
   Cookie 或 `Authorization: Bearer`；
 - 直接打开 `dist/index.html`（file://）或接口不可达：回退到 `mock.ts` 的样例数据，
   顶栏显示「演示数据」；

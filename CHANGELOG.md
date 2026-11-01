@@ -1,9 +1,42 @@
 # Changelog
 
-## 0.5.0 (2026-10-31) — 产品化 GA 门禁
+## 0.5.1 (2026-10-31) — 平滑升级
 
-> 目标：把"能跑"变成"能交付"。本版集中修复 v0.4.8 实测暴露的绕过面，补齐可观测性、
-> 权限治理、审计防篡改与安装生命周期，并把能力边界和容量数据写成可交付文档。
+### 新增
+
+- `[xdp].persist_link`（默认 `true`）：进程退出时不摘除 XDP 程序，旧程序继续过滤流量；
+  新进程启动时由内核原子替换程序，升级/重启期间数据面不中断。
+- `eshield upgrade --binary <path>`：校验新二进制与配置 → 备份当前二进制 →
+  停服 → 安装 → 启动 → 轮询 `/ready` 健康检查；失败自动回滚到备份并重启。
+  支持 `--rollback <dir>`、`--no-systemd --pid <pid>`、`--exec-prefix`。
+- `eshield detach`：摘除网卡上的 XDP 程序（`persist_link = true` 时服务停止后程序仍会驻留）。
+- `eshield --version`。
+- `scripts/install.sh` 升级路径优先调用已安装二进制的 `upgrade` 子命令；
+  旧版本（无该子命令）回退为停服安装启动，并在升级时使用 `systemctl restart` 而非 `reload`。
+
+### 变更
+
+- 项目更名为 **XuanArmor**（原名 eShield）；可执行文件、systemd 服务名、配置路径与
+  `ESHIELD_*` 环境变量保持不变。
+
+- 默认行为：`SIGTERM` 退出时保留 XDP 挂载（fail-closed）。设置 `persist_link = false`
+  可恢复 v0.5.0 的「退出即卸载」行为。
+- Web 监听改为 `SO_REUSEPORT`，并在退出时优雅关闭（排空在途请求）。
+- 退出流程增加 8s 看门狗：后台任务异常不会阻塞 `systemctl stop`。
+
+### 兼容性
+
+- 新增配置项有默认值，旧配置文件可直接加载。
+- 若服务停止后不希望保留 XDP 挂载，升级前将 `persist_link` 设为 `false`，或停止后执行 `eshield detach`。
+
+### 测试
+
+- 新增 `tests/upgrade_test.sh`，覆盖：退出后保留 XDP 挂载、pinned link 原子替换、
+  升级健康检查、无效二进制拒绝、`detach` 摘除。
+
+## 0.5.0 (2026-10-31) — 产品化与能力补齐
+
+> 修复 v0.4.8 实测暴露的绕过面，新增可观测性、权限治理、审计防篡改与安装生命周期能力。
 > 兼容性变更：`GET /api/auth/check` 由返回 `OK` 文本改为返回 `{"role":"admin"|"readonly"}`；
 > `[port_rate_limit].enabled` 默认值由 `false` 改为 `true`；新增配置项 `readonly_token`、
 > `[xdp].fragment_policy`、`[rate_limit].block_mode`、`[limits]`，旧配置可继续加载（均有默认值）。
@@ -53,7 +86,7 @@
   早期版本写入的无 hash 记录在校验时跳过。
 - **启动内存预检**：新增 `[limits]` 段——`min_memory_mb`（默认 512，低于该值告警）、
   `refuse_memory_mb`（默认 256，低于该值拒绝启动），可用 `ESHIELD_ALLOW_LOW_MEMORY=1` 强制启动
-  （不推荐）。背景：400MB 内存实例装 nginx + eShield 后 `sshd` 失去响应（TCP 通但 banner 不返回）。
+  （不推荐）。背景：400MB 内存实例装 nginx + XuanArmor 后 `sshd` 失去响应（TCP 通但 banner 不返回）。
 - **安装生命周期**：`scripts/install.sh` 新增 `--version <x.y.z>`、`--sha256 <hex>`
   （或 `ESHIELD_EXPECTED_SHA`）、`--uninstall`、`--purge`、`--rollback [dir]`、`--help`。
   升级前自动把当前二进制/配置/systemd 单元/版本号备份到
@@ -62,7 +95,7 @@
 
 ### 文档与测试
 
-- 新增 `docs/capability-boundaries.md`：逐条给出**现象 / 原因 / 缓解 / 是否计划支持**，
+- 新增 `docs/capability-boundaries.md`：逐条给出**现象 / 原因 / 缓解 / 现状**，
   覆盖 L3-L4 防护范围、不防 CC/HTTP Flood、不抗带宽耗尽、单 IP 封禁连带 NAT、伪造源与分片绕过、
   generic/native XDP 差异、SYN Proxy 实验特性、L7 仅首包 8 字节、IPv6 分片/SYN Cookie 限制、
   最小内存规格、Hub 非高可用等，并列出明确"不承诺"清单。
@@ -91,73 +124,6 @@
 - 审计链校验只覆盖当前 `audit.path` 文件；文件按大小轮转后，新文件链头指向旧文件，
   需在轮转前完成校验并归档（已写入运维文档）。
 - Hub 仍为单实例有状态服务，未提供高可用；IPv6 扩展头/分片解析、SYN Cookie IPv6 仍未支持。
-
-## Unreleased（v0.4.8 计划）
-
-### 修复
-
-- **SYN Proxy 开启时带 TCP 选项的 SYN Flood 会直通内核**：挑战包只支持 20/24 字节 TCP 头（单 MSS option），真实客户端的 SYN 普遍带 timestamps/SACK（40 字节头）。此前 `handle_syn` 对这些包头返回 `NO_ACTION`，主流程随即放行，且该包的 `rate_counted` 已置位导致全局限速也被跳过 —— 等于开启 SYN Proxy 后放弃对这类 SYN Flood 的防护。现在 `syn_cookie::handle_syn` 在挑战路径内对无法构造挑战包的包头直接返回 XDP_DROP（非 SYN 包行为不变），统一计入 `syn_flood_blocked`；同时把挑战标记有效期从 120s 降为 30s，控制对同一 IP 正常连接的误伤窗口。`tests/netns_test.sh` 的 Test 3 相应改为「被挑战源的带选项 SYN 必须被丢弃 + 未被挑战的源连接正常」，并新增 `tests/syn_proxy_options_test.sh` 专门回归该场景。
-- **热加载在 `geoip.default_action=drop` 下会切断自身管理连接**：`reload_config_file` 原先先写 `CONFIG`（把默认动作翻到 drop）再重建 allow 列表，中间存在"allow 列表为空 + 默认丢弃"窗口。现在改为最后写 `CONFIG`，且 GeoIP 规则改为"先写新条目、再删旧条目"的增量顺序。启动路径同样调整。
-- **`scripts/install.sh` 发布链路断裂**：仓库名写死为不存在的 `eshield/eshield`（实际为 `BlkSword/eShield`）且 `curl` 未加 `-f`，404 的 HTML 会被当作二进制安装；版本兜底 0.4.1、workspace 根 Cargo.toml 无 version 导致版本解析失败。现已修正仓库名/版本解析，加入 `curl -f`、ELF 头校验与 SHA256SUMS 校验，安装写入改为 `install -m 0755`，并将探测到的活动网卡写入默认配置。
-- **`/metrics` 与 Trust 分布在大表下长时间持有全局 Ebpf 锁**：抓取路径原实现会遍历 `BLACKLIST`/`RATE_MAP`（各可达 10 万条）并与事件消费互斥。现在 map 当前条目数由后台 30s 采样任务缓存到原子量，抓取只读缓存；`map_max_entries` 段改用 `try_lock`，抢不到锁就跳过；Trust 分布同步降频到 30s 且改为 `try_lock`。
-
-- **`/metrics` 的 map 指标族会随锁竞争偶发缺失**：上一版把 map 段改成 `try_lock` 后，抓取恰好撞上 Ebpf 锁时会整段跳过，导致 `eshield_map_max_entries` 时有时无（Prometheus 报警会抖）。现在改为启动时采集一次 map 静态元信息（name/type/max_entries）常驻内存，抓取路径完全不加锁。
-- **`POST /api/geoip/reload` 与运行时开关不一致**：`apply_geoip_map` 原先在配置文件 `geoip.enabled=false` 时直接清空 4 张 LPM Trie 并返回。若用户通过 API 在运行时打开了 GeoIP 再触发 reload，数据面规则会被静默清空、控制台却仍显示已启用。现在无论 `enabled` 取值都重建规则表，`enabled` 只控制数据面是否生效（`CONFIG.geoip_enabled`）。
-### 变更
-
-- **控制台认证改为纯 Cookie**：前端不再把 `api_token` 写入 `localStorage`（使 `HttpOnly` 形同虚设），令牌只在内存中保留一份用于 Bearer 兜底；登录页在 401/429/网络错误时明确报错，不再静默进入"演示数据"模式（避免把样例数据误当成真实防护状态）。
-- 新增 `POST /api/auth/logout` 清除会话 Cookie；控制台退出登录改为调用该接口。
-- HTTPS（含反代 `X-Forwarded-Proto: https`）场景下会话 Cookie 追加 `Secure`；新增 `X-Content-Type-Options`、`X-Frame-Options`、`Referrer-Policy` 与（HTTPS 时）`Strict-Transport-Security` 响应头。
-- 文档同步：`AGENTS.md` 的控制台章节（指向 `console/` 与 `app.html` 嵌入方式）、`docs/deployment.md`（版本号、`rules.redb`、K8s 清单、Hub 内置 TLS）、`console/README.md` 的 `include_str!`、`docs/api.md` 新增 logout 端点。
-- 仓库整理：删除与 `packaging/eshield.service` 完全重复的 `packaging/systemd/` 与根 `systemd/`；`.gitignore` 移除对已跟踪文件（`/docs`、`AGENTS.md`、`ROADMAP.md`）的忽略，避免新增文档被静默漏提交。
-- CI 新增 `console-build` job（`npm ci` + `vue-tsc` + `vite build`，并校验 `console/dist/index.html` 与 `eshield/web/app.html` 字节一致）；集成测试 job 修正 `sudo` 重置环境变量导致找不到 cargo 的问题，并以 `SKIP_BUILD=1` 复用已构建产物。
-- 测试脚本：`netns_test.sh` / `hub_node_test.sh` 改为自动探测 cargo（不再硬编码 `/root/.cargo`），进程清理限定为 `/tmp/eshield*`，并在测试前备份、退出时恢复宿主 `/var/lib/eshield/rules.redb`。
-- `scripts/build-release.sh` 补上 Hub 二进制产物，与 `publish-release.sh` 期望的资产对齐。
-- 新增 `.gitattributes`（文本文件统一 LF，二进制资源标记 binary），并规范化仓库内全部 `*.sh`：此前 Windows 检出得到的 CRLF 脚本在 Linux 上会直接 `syntax error near unexpected token 'do\r'`，本次远端构建时实际命中（`scripts/publish-release.sh`）。
-- `docs/dev-linux.md` 重写：补充 musl-tools / `x86_64-linux-musl-gcc` 软链、bpf-linker 版本必须固定 0.10.4（实测 0.12.0 生成被 verifier 拒绝的 `R11 is invalid` 代码）、以及「verifier 只在 attach 时校验，编译通过 != 能挂载」的最小挂载自检方法。
-
-### 控制台与可观测性
-
-- **黑名单保留首次触发原因**：`BlockEntry` 新增 `last_reason`，数据面/自适应/威胁情报再次
-  命中同一 IP 时不再覆盖首因，控制台黑名单页显示「原因 / 叠加 原因」，运维能看到真正的
-  触发源（例：`速率限制 / 叠加 自适应`）。合并逻辑抽到 `eshield_common::pure::merge_block_entry`，
-  数据面与控制面共用并有 6 个单元测试。
-- **`/metrics` 覆盖全部 LRU 表**：除 `BLACKLIST`/`RATE_MAP` 外新增 `PORT_RATE_MAP`/`TRUST_MAP`/
-  `CONN_TRACK`/`SYN_PROXY_CONN`/`TOP_ATTACKERS`/`PROJECT_POLICY` 条目数（后台采样，
-  `metrics_interval_s` 可配，抓取路径零加锁）。
-- **控制台 SPA gzip**：1.26MB 单文件 HTML 按 `Accept-Encoding` 协商下发 gzip（约 420KB），
-  带 `Vary: Accept-Encoding`。
-
-### 数据面
-
-- **SYN Proxy 支持带 TCP 选项的 SYN**：对 20–60 字节 TCP 头（timestamps/SACK 等），用
-  `bpf_xdp_adjust_tail` 裁掉多余选项字节并重建 24 字节头（含 MSS option），不再直接丢弃；
-  仅对"纯 SYN（无载荷）"生效，带 IP option 或携带数据的 SYN 仍按 SYN Flood 丢弃。
-- 威胁情报启动时**只同步一次**（此前 interval 首次 tick 与显式调用叠加，导致重复拉取/重复审计）。
-
-### Hub
-
-- 心跳接口增加**令牌桶限流**与 `node_name` 长度校验（防伪造名字撑大注册表/限流桶）。
-- 策略删除改为**单事务批量删除**（`Store::delete_policies`），不再逐 IP 各开一次写事务；
-  单请求最多 10000 个 IP。
-- Hub 增加请求日志中间件与结构化审计事件（`hub_audit`: push/delete/auth_failed）。
-- 修复：`/api/geoip/reload` 用配置文件 `enabled` 决定是否写规则，导致运行时开关与数据面不一致
-  （已在上一提交修复，此处补充说明）。
-
-### 测试与工具
-
-- `scripts/install.sh` 支持 `ESHIELD_INSTALL_{BIN,CFG,STORE_PATH,SERVICE_FILE,SKIP_SYSTEMD}`
-  覆盖安装路径，便于无副作用验证安装流程；已实测「下载失败干净退出」与「源码构建安装」两条路径。
-- `tests/full_attack_test.sh` 增加失败断言（此前全部 `|| true`，永远返回成功）。
-- `tests/netns_test.sh` 启动等待改为轮询 API 就绪，减少固定 sleep。
-- 新增 `tests/stress_local.sh`：本地混合洪水 soak + 威胁情报批量封禁把 `BLACKLIST`
-  灌到 1 万条，验证压测期间控制面可用、计数单调、指标族数量不退化（实测 30s 处理
-  4554 万包、指标族 57→59、饱和后 healthz 仍 200）。
-- 新增 `tests/blacklist_reason_test.sh`：黑名单「首因 + 叠加原因」与
-  `rate_limit.dport_grouping` 双向回归（分组开启不误封 / 关闭后仍封禁）。
-- 配置样例补充「threshold 是突发信用」的说明：指数衰减稳态 ≈ 每 tick 到达数 /
-  (1 - decay)，默认 `200/100ms + 7/8` 对应的持续速率约为 250pps（单 IP），
-  高持续速率业务需同时调大 threshold 或调小衰减比例。
 
 ## 0.4.8 (2026-10-25) — 生产可用性硬化
 

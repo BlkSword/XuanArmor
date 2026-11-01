@@ -24,7 +24,7 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    echo "=== Building eShield + Hub ==="
+    echo "=== Building XuanArmor + Hub ==="
     "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
     "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
     "$CARGO" build --package eshield-hub --release -q
@@ -132,7 +132,7 @@ ip netns exec eshield-server /tmp/eshield-hub \
 HUB_PID=$!
 sleep 1
 
-echo "=== Starting eShield node ==="
+echo "=== Starting XuanArmor node ==="
 ip netns exec eshield-server /tmp/eshield start --config "$CFG" > "$NODE_LOG" 2>&1 &
 ESHIELD_PID=$!
 sleep 3
@@ -224,7 +224,7 @@ echo "PASS: Hub rules synced to node"
 
 echo "=== Test H8: Hub Dashboard and Node cluster page are served ==="
 node_curl / | grep -q "集群节点" || true
-hub_curl / | grep -q "eShield Hub" || true
+hub_curl / | grep -q "XuanArmor Hub" || true
 hub_curl /login | grep -q "Hub Token" || true
 echo "PASS: dashboards served"
 

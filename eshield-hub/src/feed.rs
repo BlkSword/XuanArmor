@@ -45,7 +45,7 @@ async fn sync_once(config: &FeedConfig, store: &Store) -> Result<()> {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(120))
-        .user_agent("eShield-Hub/0.5.0")
+        .user_agent("XuanArmor-Hub/0.5.0")
         .build()
         .context("build feed HTTP client")?;
 

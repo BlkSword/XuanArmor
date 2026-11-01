@@ -169,6 +169,7 @@ pub async fn run(
     bind: String,
     packet_log: Arc<PacketLog>,
     map_infos: Arc<Vec<MapInfo>>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(WebState {
         stats,
@@ -254,14 +255,55 @@ pub async fn run(
         .merge(protected)
         .layer(middleware::from_fn(security_headers));
 
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!("web dashboard listening on http://{}", bind);
+    // SO_REUSEPORT：平滑升级时新进程可以先绑定同一端口，旧进程再排空退出，
+    // 控制面在切换期间不出现"端口被占用/连接被拒"。
+    let listener = bind_reuseport(&bind)?;
+    tracing::info!("web dashboard listening on http://{} (SO_REUSEPORT)", bind);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(async move {
+        let _ = shutdown.changed().await;
+        tracing::info!("web server shutting down gracefully");
+    })
     .await?;
     Ok(())
+}
+
+/// 创建带 SO_REUSEPORT 的 TCP 监听器（升级交接用）。
+fn bind_reuseport(bind: &str) -> anyhow::Result<tokio::net::TcpListener> {
+    use socket2::{Domain, Protocol, Socket, Type};
+
+    let addr: SocketAddr = bind
+        .parse()
+        .map_err(|e| anyhow::anyhow!("invalid web_bind '{bind}': {e}"))?;
+    let domain = if addr.is_ipv6() {
+        Domain::IPV6
+    } else {
+        Domain::IPV4
+    };
+    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))
+        .map_err(|e| anyhow::anyhow!("socket(): {e}"))?;
+    socket
+        .set_reuse_address(true)
+        .map_err(|e| anyhow::anyhow!("SO_REUSEADDR: {e}"))?;
+    #[cfg(unix)]
+    socket
+        .set_reuse_port(true)
+        .map_err(|e| anyhow::anyhow!("SO_REUSEPORT: {e}"))?;
+    socket
+        .bind(&addr.into())
+        .map_err(|e| anyhow::anyhow!("bind {bind}: {e}"))?;
+    socket
+        .listen(1024)
+        .map_err(|e| anyhow::anyhow!("listen {bind}: {e}"))?;
+    socket
+        .set_nonblocking(true)
+        .map_err(|e| anyhow::anyhow!("set_nonblocking: {e}"))?;
+    let std_listener: std::net::TcpListener = socket.into();
+    tokio::net::TcpListener::from_std(std_listener)
+        .map_err(|e| anyhow::anyhow!("tokio listener: {e}"))
 }
 
 async fn auth_middleware(

@@ -70,7 +70,7 @@ echo "=== Mounting debugfs ==="
 mount -t debugfs none /sys/kernel/debug 2>/dev/null || true
 > /sys/kernel/debug/tracing/trace_pipe || true
 
-echo "=== Starting eShield ==="
+echo "=== Starting XuanArmor ==="
 ESHIELD_LOG="$TMPDIR/eshield.log"
 export RUST_LOG=debug
 ip netns exec eshield-server /tmp/eshield start --config "$TMPDIR/eshield-geoip.toml" >"$ESHIELD_LOG" 2>&1 &
@@ -89,7 +89,7 @@ echo "=== Pinging from client (should be dropped) ==="
 ip netns exec eshield-client ping -c 1 -W 2 10.0.0.1 || true
 
 sleep 1
-echo "=== eShield log (last 80 lines) ==="
+echo "=== XuanArmor log (last 80 lines) ==="
 tail -n 80 "$ESHIELD_LOG" 2>/dev/null || true
 
 echo "=== trace_pipe ==="

@@ -36,12 +36,12 @@ async function submit() {
     }
     // 认证凭据由后端以 HttpOnly Cookie 下发，内存中保留一份供 Bearer 兜底。
     setToken(token.value)
-    toast('登录成功', '欢迎回到 eShield 控制台', 'ok')
+    toast('登录成功', '欢迎回到 XuanArmor 控制台', 'ok')
     window.location.assign('/#/overview')
   } catch {
     // 网络不可达：明确报错，绝不静默切到演示数据 —— 把样例数据当成真实防护状态
     // 会让运维误判节点仍在防护。需要演示数据时请显式使用 ?mock=1 或直接打开离线 HTML。
-    error.value = '无法连接 eShield 节点（网络错误），未登录'
+    error.value = '无法连接 XuanArmor 节点（网络错误），未登录'
   } finally {
     busy.value = false
   }
@@ -59,7 +59,7 @@ async function submit() {
           </svg>
         </div>
         <div>
-          <div class="brand-name">eShield</div>
+          <div class="brand-name">XuanArmor</div>
           <div class="brand-sub">主机防护控制台</div>
         </div>
       </div>

@@ -40,7 +40,7 @@ EOF
 
 cat >/lib/systemd/system/eshield.service <<'EOF'
 [Unit]
-Description=eShield
+Description=XuanArmor
 After=network-online.target
 
 [Service]

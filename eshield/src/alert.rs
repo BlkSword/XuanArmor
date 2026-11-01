@@ -130,7 +130,7 @@ impl AlertManager {
             threshold_dps: self.config.threshold_dps,
             cooldown_s: self.config.cooldown_s,
             message: format!(
-                "eShield [{}] 告警：DROP 速率 {} pps 超过阈值 {} pps",
+                "XuanArmor [{}] 告警：DROP 速率 {} pps 超过阈值 {} pps",
                 self.config.interface, dps, self.config.threshold_dps
             ),
             rule_breakdown,
@@ -155,7 +155,7 @@ impl AlertManager {
                         "text": {
                             "type": "mrkdwn",
                             "text": format!(
-                                "*eShield {} 告警*\nDROP 速率：{} pps\n阈值：{} pps\n总丢弃：{}\nTOP 攻击源：{}",
+                                "*XuanArmor {} 告警*\nDROP 速率：{} pps\n阈值：{} pps\n总丢弃：{}\nTOP 攻击源：{}",
                                 event.interface,
                                 event.dps,
                                 event.threshold_dps,

@@ -1,4 +1,4 @@
-# eShield 部署指南
+# XuanArmor 部署指南
 
 ## 控制台 TLS 与 XDP 模式（v0.4.8）
 
@@ -31,7 +31,7 @@
 ## 一键安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BlkSword/eShield/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
 ```
 
 或从源码构建安装（推荐用于 aarch64 或离线环境）：
@@ -43,11 +43,11 @@ sudo bash scripts/install.sh --build
 安装脚本会：构建/下载二进制 → 校验 ELF 与 SHA256SUMS → 安装到 `/usr/local/bin/eshield` →
 创建 `/etc/eshield/config.toml`（网卡按实际活动网卡写入）→ 安装并启动 systemd 服务。
 
-v0.5.0 起脚本同时支持升级与生命周期管理：
+v0.5.1 起脚本同时支持平滑升级与生命周期管理：
 
 ```bash
-sudo bash scripts/install.sh --version 0.5.0            # 指定版本升级（升级前自动备份）
-sudo bash scripts/install.sh --version 0.5.0 --sha256 <hex>   # 额外校验下载产物
+sudo bash scripts/install.sh --version 0.5.1            # 指定版本升级（升级前自动备份）
+sudo bash scripts/install.sh --version 0.5.1 --sha256 <hex>   # 额外校验下载产物
 sudo bash scripts/install.sh --rollback [备份目录]      # 回滚（默认最近一次备份）
 sudo bash scripts/install.sh --uninstall [--purge]      # 卸载（--purge 删除配置与数据）
 ```
@@ -60,8 +60,8 @@ sudo bash scripts/install.sh --uninstall [--purge]      # 卸载（--purge 删�
 ### 1. 下载静态二进制
 
 ```bash
-VERSION=0.5.0
-curl -fsSLO "https://github.com/BlkSword/eShield/releases/download/v${VERSION}/eshield-x86_64-unknown-linux-musl"
+VERSION=0.5.1
+curl -fsSLO "https://github.com/BlkSword/XuanArmor/releases/download/v${VERSION}/eshield-x86_64-unknown-linux-musl"
 sudo install -m 755 eshield-x86_64-unknown-linux-musl /usr/local/bin/eshield
 ```
 
@@ -70,7 +70,7 @@ sudo install -m 755 eshield-x86_64-unknown-linux-musl /usr/local/bin/eshield
 ```bash
 sudo mkdir -p /etc/eshield
 sudo curl -fsSL -o /etc/eshield/config.toml \
-  https://raw.githubusercontent.com/BlkSword/eShield/v0.5.0/packaging/config.example.toml
+  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.5.1/packaging/config.example.toml
 sudoedit /etc/eshield/config.toml
 ```
 
@@ -78,7 +78,7 @@ sudoedit /etc/eshield/config.toml
 
 ```bash
 sudo curl -fsSL -o /lib/systemd/system/eshield.service \
-  https://raw.githubusercontent.com/BlkSword/eShield/v0.5.0/packaging/eshield.service
+  https://raw.githubusercontent.com/BlkSword/XuanArmor/v0.5.1/packaging/eshield.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now eshield
 ```
@@ -98,7 +98,7 @@ docker run -d --name eshield \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/eshield/config.toml:/etc/eshield/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/eshield:v0.5.0
+  ghcr.io/blksword/eshield:v0.5.1
 ```
 
 > 容器内需要能访问宿主网卡才能挂载 XDP，通常使用 `--network host` 并显式指定 `ESHIELD_XDP_MODE=skb`。
@@ -125,8 +125,8 @@ kubectl apply -f packaging/k8s/
 ### 下载并启动 Hub
 
 ```bash
-VERSION=0.5.0
-curl -fsSLO "https://github.com/BlkSword/eShield/releases/download/v${VERSION}/eshield-hub-x86_64-unknown-linux-gnu"
+VERSION=0.5.1
+curl -fsSLO "https://github.com/BlkSword/XuanArmor/releases/download/v${VERSION}/eshield-hub-x86_64-unknown-linux-gnu"
 sudo install -m 755 eshield-hub-x86_64-unknown-linux-gnu /usr/local/bin/eshield-hub
 
 sudo mkdir -p /var/lib/eshield-hub
@@ -169,7 +169,7 @@ sudo systemctl reload eshield
 ```ini
 # /lib/systemd/system/eshield-hub.service
 [Unit]
-Description=eShield Distributed Policy Hub
+Description=XuanArmor Distributed Policy Hub
 After=network.target
 
 [Service]
@@ -187,7 +187,7 @@ WantedBy=multi-user.target
 推荐使用安装脚本（自动备份、校验与回滚）：
 
 ```bash
-sudo bash scripts/install.sh --version 0.5.0
+sudo bash scripts/install.sh --version 0.5.1
 # 出问题时回滚到最近一次备份
 sudo bash scripts/install.sh --rollback
 ```

@@ -1,4 +1,4 @@
-# eShield 模块耦合性评估（2026-10）
+# XuanArmor 模块耦合性评估（2026-10）
 
 > 评估对象：v0.4.6 之后的控制台重构版本（`console/` + `eshield/web/app.html`）
 > 方法：静态分层与 import / 调用关系统计、共享状态审查、前后端接口逐条核对
@@ -89,7 +89,7 @@ API 层、展示层与资源层三种职责。
 3. `ControlState` 字段改私有，Web 通过 `list_blacklist()`、`list_whitelist()`、`runtime_snapshot()`
    等只读方法访问；禁止直接 `control.ebpf.lock()`。
 4. 规则显示名统一到 `eshield-common::rules::display_name()`；本轮已把 `web.rs` 内
-   `attack_events_handler` 的重复 match 收敛到 `rule_display_name`，下一步是上移到 `eshield-common`。
+   `attack_events_handler` 的重复 match 收敛到 `rule_display_name`。
 
 评分：**5 / 10**。
 

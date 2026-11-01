@@ -74,7 +74,7 @@ async function sync() {
       <KpiCard label="待同步" :value="0" format="int" foot="本地策略已上报" />
     </div>
 
-    <PanelCard title="节点列表" sub="Hub 侧的 eShield 节点与策略版本" flush>
+    <PanelCard title="节点列表" sub="Hub 侧的 XuanArmor 节点与策略版本" flush>
       <div class="table-wrap">
         <table class="dt">
           <thead><tr><th>节点</th><th>地址</th><th>版本</th><th class="col-num">策略数</th><th>最近心跳</th><th>状态</th><th class="col-actions">操作</th></tr></thead>

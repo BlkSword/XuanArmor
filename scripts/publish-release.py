@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""eShield GitHub Release 发布脚本。
+"""XuanArmor GitHub Release 发布脚本。
 
 用法：
     export GH_TOKEN=ghp_xxx          # Linux / Git Bash
@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = "BlkSword/eShield"
+REPO = "BlkSword/XuanArmor"
 
 
 def current_version() -> str:
@@ -95,7 +95,7 @@ def extract_changelog_body() -> str:
             body_lines.append(line)
     body = "\n".join(body_lines).strip()
     if not body:
-        body = f"eShield {TAG} release."
+        body = f"XuanArmor {TAG} release."
     return body
 
 
@@ -103,7 +103,7 @@ def create_release(token: str, body: str) -> str:
     url = f"https://api.github.com/repos/{REPO}/releases"
     payload = {
         "tag_name": TAG,
-        "name": f"eShield {TAG}",
+        "name": f"XuanArmor {TAG}",
         "body": body,
         "draft": False,
         "prerelease": False,

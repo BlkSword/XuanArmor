@@ -1,9 +1,9 @@
 {
   "name": "eshield-console",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "type": "module",
-  "description": "eShield host protection console",
+  "description": "XuanArmor host protection console",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",

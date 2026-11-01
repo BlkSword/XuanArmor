@@ -134,6 +134,14 @@ pub struct XdpConfig {
     /// - `pass`：跳过 L4 模块直接放行（v0.4.x 兼容行为，不推荐）。
     #[serde(default = "default_fragment_policy")]
     pub fragment_policy: String,
+    /// 平滑升级（v0.5.1）：进程退出时**不摘除** XDP 程序（fail-closed）。
+    /// 旧程序会继续过滤流量，新进程启动时由内核原子替换，从而实现升级期间数据面零空窗。
+    /// 需要显式卸载时使用 `eshield detach`；设为 false 则恢复"退出即卸载"的旧行为。
+    #[serde(default = "default_true")]
+    pub persist_link: bool,
+    /// bpffs 挂载目录（默认 /sys/fs/bpf）：pinned link 以 `eshield_xdp_link` 文件名放在这里。
+    #[serde(default = "default_pin_path")]
+    pub pin_path: String,
 }
 
 impl Default for XdpConfig {
@@ -143,12 +151,18 @@ impl Default for XdpConfig {
             disable_offloads: true,
             auto_reattach: true,
             fragment_policy: default_fragment_policy(),
+            persist_link: true,
+            pin_path: default_pin_path(),
         }
     }
 }
 
 fn default_xdp_mode() -> String {
     "auto".to_string()
+}
+
+fn default_pin_path() -> String {
+    "/sys/fs/bpf".to_string()
 }
 
 fn default_fragment_policy() -> String {
@@ -670,7 +684,7 @@ fn default_port_rate_threshold() -> u64 {
 }
 
 /// 启动资源预检（v0.5.0）：避免在过小规格机器上"装上就跑、跑着被 OOM"。
-/// 实测 400MB 内存实例在装 nginx + eShield 后 sshd 失去响应。
+/// 实测 400MB 内存实例在装 nginx + XuanArmor 后 sshd 失去响应。
 #[derive(Debug, Clone, Deserialize)]
 pub struct LimitsConfig {
     /// 低于该值启动时打印醒目告警（默认 512MB）
@@ -736,6 +750,10 @@ impl Config {
             other => anyhow::bail!(
                 "invalid [xdp].fragment_policy '{other}' (expected pass | rate_limit | drop)"
             ),
+        }
+
+        if self.xdp.persist_link && self.xdp.pin_path.trim().is_empty() {
+            anyhow::bail!("[xdp].pin_path 不能为空（persist_link = true 时需要 bpffs 路径）");
         }
 
         match self.rate_limit.block_mode.to_ascii_lowercase().as_str() {

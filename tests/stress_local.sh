@@ -1,10 +1,10 @@
 #!/bin/bash
-# eShield 本地压测：混合洪水 soak + 黑名单 map 饱和。
+# XuanArmor 本地压测：混合洪水 soak + 黑名单 map 饱和。
 #
 # 目的：验证「长时间混合洪水下不崩溃、计数单调、控制面仍可响应」以及
 #      「BLACKLIST 接近容量上限时批量封禁/统计/查询仍然正确」。
 #
-# 注意：eShield 与 feed 服务都跑在 netns 内，所以所有 API 调用必须
+# 注意：XuanArmor 与 feed 服务都跑在 netns 内，所以所有 API 调用必须
 #      `ip netns exec` 进去（宿主机访问不到 ns 内的 127.0.0.1）。
 #
 # 用法：
@@ -39,7 +39,7 @@ export PATH="$(dirname "$CARGO"):$PATH"
 cd "$(dirname "$0")/.."
 
 if [ -z "$SKIP_BUILD" ]; then
-    echo "=== Building eShield ==="
+    echo "=== Building XuanArmor ==="
     "$CARGO" +"$EBPF_TOOLCHAIN" build --package eshield-ebpf --target bpfel-unknown-none -Z build-std=core --release -q
     "$CARGO" build --package eshield --target x86_64-unknown-linux-musl --release -q
 fi

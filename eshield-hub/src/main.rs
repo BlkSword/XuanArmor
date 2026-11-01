@@ -30,7 +30,7 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "eshield-hub")]
-#[command(about = "eShield distributed policy hub")]
+#[command(about = "XuanArmor distributed policy hub")]
 struct Args {
     #[arg(long, default_value = "0.0.0.0:9930")]
     bind: String,
