@@ -725,7 +725,7 @@ impl Config {
         let mut config: Config = toml::from_str(&content).context("failed to parse config file")?;
         // 允许 `cargo xtask run --iface eth0` 通过环境变量覆盖配置文件中的网卡，
         // 便于在不改动 /etc/xuanarmor/config.toml 的情况下做本地/CI 调试。
-        if let Ok(iface) = crate::config::env_compat("XUANARMOR_INTERFACE", "ESHIELD_INTERFACE") {
+        if let Some(iface) = crate::config::env_compat("XUANARMOR_INTERFACE", "ESHIELD_INTERFACE") {
             if !iface.is_empty() {
                 config.interface = iface;
             }

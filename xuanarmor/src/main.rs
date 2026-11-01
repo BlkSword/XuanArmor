@@ -253,7 +253,6 @@ async fn main() -> anyhow::Result<()> {
 fn resolve_token(token: Option<String>) -> Option<String> {
     token.filter(|t| !t.is_empty()).or_else(|| {
         crate::config::env_compat("XUANARMOR_API_TOKEN", "ESHIELD_API_TOKEN")
-            .ok()
             .filter(|t| !t.is_empty())
     })
 }
