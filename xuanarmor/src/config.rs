@@ -29,6 +29,26 @@ impl BlockOrigin {
     }
 }
 
+/// 上游应用访问 Token（v0.5.2）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiTokenConfig {
+    /// Token 名称（审计与日志中标识调用方）
+    #[serde(default)]
+    pub name: String,
+    /// 密钥；请求时通过 `Authorization: Bearer <token>` 携带
+    pub token: String,
+    /// admin | operator | readonly（默认 operator）
+    #[serde(default = "default_api_token_role")]
+    pub role: String,
+    /// 作用域，如 read/write/policy/events/system；空时按角色默认
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+fn default_api_token_role() -> String {
+    "operator".to_string()
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct Config {
     pub interface: String,
@@ -73,6 +93,10 @@ pub struct Config {
     /// 留空表示不启用只读角色。
     #[serde(default)]
     pub readonly_token: Option<String>,
+    /// 上游应用 Token 列表（v0.5.2 API 扩展）：每项含 name/token/role/scopes。
+    /// 与 api_token/readonly_token 同时生效；同名时先出现的配置项优先。
+    #[serde(default)]
+    pub api_tokens: Vec<ApiTokenConfig>,
     #[serde(default = "default_false")]
     pub log_json: bool,
     #[serde(default = "default_store_path")]
@@ -586,7 +610,7 @@ fn default_false() -> bool {
     false
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -659,7 +683,7 @@ fn default_block_duration_s() -> u64 {
 /// 用于防换源 IP 绕过（源 IP 随机化时 per-IP 限速失效）。
 /// v0.5.0 起默认开启：实测伪造源 SYN/UDP Flood 可绕开 per-IP 黑名单，
 /// 端口维度是唯一不依赖源地址的兜底；阈值默认高于 per-IP（聚合多源流量）。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PortRateLimitConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -720,6 +744,13 @@ fn default_refuse_memory_mb() -> u64 {
 }
 
 impl Config {
+    /// 从 TOML 文本解析配置并校验（供 `POST /api/config/validate` 使用）。
+    pub fn from_toml_str(content: &str) -> anyhow::Result<Self> {
+        let config: Self = toml::from_str(content).context("failed to parse config")?;
+        config.validate()?;
+        Ok(config)
+    }
+
     pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path).context("failed to read config file")?;
         let mut config: Config = toml::from_str(&content).context("failed to parse config file")?;
@@ -735,6 +766,29 @@ impl Config {
 
     /// 校验配置合法性。
     pub fn validate(&self) -> anyhow::Result<()> {
+        // 多 Token 配置校验：名称唯一、角色合法、密钥非空。
+        {
+            let mut names = std::collections::HashSet::new();
+            for t in &self.api_tokens {
+                let name = t.name.trim();
+                if name.is_empty() {
+                    anyhow::bail!("[[api_tokens]].name 不能为空");
+                }
+                if t.token.trim().is_empty() {
+                    anyhow::bail!("[[api_tokens]].token 不能为空（name={name}）");
+                }
+                if crate::auth::Role::parse(&t.role).is_none() {
+                    anyhow::bail!(
+                        "[[api_tokens]] 的 role 非法：{}（可选 admin/operator/readonly，name={name}）",
+                        t.role
+                    );
+                }
+                if !names.insert(name.to_string()) {
+                    anyhow::bail!("[[api_tokens]] 名称重复：{name}");
+                }
+            }
+        }
+
         if self.interface.is_empty() {
             anyhow::bail!("interface cannot be empty");
         }

@@ -58,6 +58,8 @@ pub struct Stats {
     pub xdp_mode: AtomicU8,
     /// 最近攻击事件环形缓冲（最多 1000 条）
     pub recent_attacks: Mutex<VecDeque<DropEvent>>,
+    /// 攻击事件累计序号（单调递增），供 `/api/events?after_seq=` 游标使用
+    pub attack_seq: AtomicU64,
     pub timeseries: Arc<RwLock<TimeSeriesWindow>>,
 }
 
@@ -108,6 +110,7 @@ impl Default for Stats {
             xdp_attached: AtomicBool::new(false),
             xdp_mode: AtomicU8::new(0),
             recent_attacks: Mutex::new(VecDeque::new()),
+            attack_seq: AtomicU64::new(0),
             timeseries: Arc::new(RwLock::new(TimeSeriesWindow::new(8640, 10))),
         }
     }
@@ -169,12 +172,38 @@ impl Stats {
             }
             buf.push_back(*event);
         }
+        self.attack_seq
+            .fetch_add(events.len() as u64, Ordering::Relaxed);
     }
 
     /// 返回最近的攻击事件快照。
     pub fn attack_events(&self, limit: usize) -> Vec<DropEvent> {
         let buf = self.recent_attacks.lock().unwrap();
         buf.iter().rev().take(limit).copied().collect()
+    }
+
+    /// 当前最新事件序号（0 表示尚无事件）。
+    pub fn attack_seq(&self) -> u64 {
+        self.attack_seq.load(Ordering::Relaxed)
+    }
+
+    /// 返回 `after_seq` 之后的攻击事件及其序号（升序，最多 `limit` 条）。
+    pub fn attack_events_since(&self, after_seq: u64, limit: usize) -> Vec<(u64, DropEvent)> {
+        let buf = self.recent_attacks.lock().unwrap();
+        let total = self.attack_seq.load(Ordering::Relaxed);
+        let len = buf.len() as u64;
+        let first_seq = total.saturating_sub(len).saturating_add(1);
+        let mut out = Vec::new();
+        for (idx, event) in buf.iter().enumerate() {
+            let seq = first_seq + idx as u64;
+            if seq > after_seq {
+                out.push((seq, *event));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        out
     }
 }
 

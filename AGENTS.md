@@ -77,13 +77,17 @@
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
 - `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
   v0.5.2 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
+- `apictl.rs`：上游编排 API（v0.5.2，未发布）：`/api/version`、`/api/openapi.json`、
+  `/api/config/validate`、`/api/policy`（读取/原子下发，支持 dry-run 与 `Idempotency-Key`）、
+  `/api/events`（游标）与 `/api/events/stream`（SSE）、`/api/tokens`（多 Token 管理）。
 - `xdp_link.rs`：XDP 挂载生命周期（v0.5.2）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
   （`[xdp].persist_link`，默认 true），进程退出后旧程序继续过滤，新进程用 `bpf_link_update`
   原子替换；`pin_path` 不可用时回退 `/run/xuanarmor-bpf`。
 - `upgrade.rs`：`xuanarmor upgrade`（v0.5.2）平滑升级：校验 → 备份 → 停服 → 安装 → 启动 →
   `/ready` 健康检查 → 失败自动回滚；支持 `--rollback`、`--no-systemd --pid`、`--exec-prefix`。
-- `auth.rs`：Bearer Token 认证；本机 `127.0.0.1/::1` 自动跳过校验；v0.5.0 起支持 `readonly_token`
-  只读角色（仅 GET/HEAD/OPTIONS，写操作 403）与 `GET /api/auth/check` 角色查询。
+- `auth.rs`：Bearer Token 认证；本机 `127.0.0.1/::1` 自动跳过校验。支持多 Token：
+  `admin` / `operator` / `readonly` 角色与作用域（`[[api_tokens]]`），兼容 `api_token`、
+  `readonly_token`；`GET /api/auth/check` 返回当前角色。
 - `audit.rs`：审计日志后端（内存 / JSON Lines 文件）；v0.5.0 起文件后端写入
   `seq`/`prev_hash`/`hash` 哈希链，并提供 `verify_chain()` 供 `GET /api/audit/verify` 使用。
 - `store.rs`：基于 redb 的规则持久化。
@@ -300,6 +304,8 @@ sudo bash scripts/benchmark.sh
 
 - `interface` / `web_bind`：XDP 挂载网卡与 Web/API 监听地址（默认 `0.0.0.0:8720`）。
 - `api_token` / `readonly_token`：读写 Token 与只读 Token（v0.5.0）；只读 Token 仅允许 GET/HEAD/OPTIONS。
+- `[[api_tokens]]`：上游应用多 Token（name/token/role/scopes），角色 `admin`/`operator`/`readonly`，
+  作用域 `read`/`write`/`policy`/`events`/`system`/`*`（v0.5.2 未发布）。
 - `whitelist` / `blacklist`：启动时加载的静态 CIDR 白名单与永久黑名单。
 - `[xdp]`：XDP 挂载策略（`mode = auto|native|generic`、`disable_offloads`、`auto_reattach`）、
   `fragment_policy = pass|rate_limit|drop`（v0.5.0，默认 `rate_limit`，按「协议 + 0 端口」聚合限速）、
@@ -364,7 +370,7 @@ sudo kill -HUP $(pidof xuanarmor)
 
 - Dashboard：`http://<host>:8720/`
 - Prometheus 指标：`http://<host>:8720/metrics`
-- REST API：详见 `docs/api.md`
+- REST API：详见 `docs/api.md`（含「上游编排 API」：策略原子下发、事件游标/SSE、多 Token 管理、OpenAPI）
 - 审计 SSE：`GET /api/audit/stream`
 
 认证：未设置 `api_token` 时，进程会生成随机 Token 并要求外部请求携带 `Authorization: Bearer <token>`（不存在匿名外部模式）；显式设置 `api_token` 后以其为准。本机 CLI（`127.0.0.1/::1`）自动跳过校验，但带 `X-Forwarded-For`/`X-Real-IP`/`Forwarded` 头的反向代理请求不再享受该豁免。

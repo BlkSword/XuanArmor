@@ -282,3 +282,14 @@ enabled = false
 # client_cert = "/etc/xuanarmor/hub-client.pem"  # 客户端证书（可选）
 # client_key = "/etc/xuanarmor/hub-client.key"   # 客户端私钥（可选）
 # verify = true                                # 是否校验服务端证书
+
+# ── 多 Token（v0.5.2 上游编排 API）──────────────────────────────────────────
+# 每个 Token 有名称（审计中标识调用方）、角色与作用域：
+#   role = "admin" | "operator" | "readonly"
+#   scopes = ["read", "write", "policy", "events", "system", "*"]（留空按角色默认）
+# 与 api_token / readonly_token 同时生效；建议上游应用各用一个独立 Token 便于审计与吊销。
+# [[api_tokens]]
+# name = "orchestrator-prod"
+# token = "change-me-0123456789abcdef"
+# role = "operator"
+# scopes = ["read", "write", "policy", "events"]

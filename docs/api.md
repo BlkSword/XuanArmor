@@ -506,3 +506,168 @@ Hub 返回：
   "updated_at_ns": 1750819200000000000
 }
 ```
+
+## 上游编排 API（v0.5.2）
+
+面向编排系统 / 上游应用的远程控制接口，补充在原有管理 API 之上。所有接口都需要
+`Authorization: Bearer <token>`（本机回环请求免认证），返回 JSON。
+
+### 认证模型
+
+| 角色 | 说明 | 写操作 | Token 管理 |
+|---|---|---|---|
+| `admin` | 全部权限 | 是 | 是 |
+| `operator` | 读写策略/封禁，适合编排器 | 是 | 否 |
+| `readonly` | 只读，适合监控/大屏 | 否（403） | 否 |
+
+配置示例（`/etc/xuanarmor/config.toml`）：
+
+```toml
+api_token = "admin-token-0123456789"        # 兼容旧配置：等价 admin 角色
+readonly_token = "readonly-token-012345"    # 兼容旧配置：等价 readonly 角色
+
+[[api_tokens]]
+name = "orchestrator-prod"                  # 审计与日志中标识调用方
+token = "orchestrator-token-0123456789abcdef"
+role = "operator"
+scopes = ["read", "write", "policy", "events"]
+
+[[api_tokens]]
+name = "prometheus"
+token = "prometheus-token-01234567890123"
+role = "readonly"
+```
+
+作用域可选：`read`、`write`、`policy`、`events`、`system`、`*`；留空时按角色取默认值。
+运行时 Token 可通过 API 创建/吊销（重启后失效），配置文件中的 Token 只能改配置后重启。
+
+### GET /api/version
+
+返回版本、API schema、能力清单与运行时信息，供上游做能力探测：
+
+```json
+{
+  "name": "XuanArmor",
+  "version": "0.5.2",
+  "api_schema": 1,
+  "capabilities": ["policy.read", "policy.apply", "policy.dry_run", "config.validate",
+                   "events.poll", "events.stream", "tokens.manage", "idempotency_key", "openapi"],
+  "started_unix": 1762700000,
+  "uptime_s": 3600,
+  "runtime": {"interface": "eth0", "xdp_mode": "native", "xdp_attached": true}
+}
+```
+
+### GET /api/openapi.json
+
+OpenAPI 3 描述（含认证方式与已实现路径），可直接用于生成客户端 SDK。
+
+### POST /api/config/validate
+
+下发前校验配置，避免把错误配置推到线上：
+
+```json
+{"toml": "interface = \"eth0\"\napi_token = \"...\"\n"}
+```
+
+返回 `{"valid": true, "errors": []}`；也可传 `{"config": {...}}`（JSON 形式，字段同 TOML）。
+
+### GET /api/policy
+
+读取当前可编排策略与版本指纹 `etag`：
+
+```json
+{
+  "policy": {
+    "whitelist": ["10.0.0.0/8"],
+    "blacklist": ["203.0.113.0/24"],
+    "port_acl": [],
+    "protection_projects": [],
+    "l7_scan": {"patterns": []},
+    "geoip": {...},
+    "rate_limit": {...},
+    "port_rate_limit": {...}
+  },
+  "etag": "sha256:...",
+  "source": "config_file"
+}
+```
+
+### POST /api/policy/apply
+
+原子下发策略，支持部分字段覆盖、`dry_run` 预演与 `Idempotency-Key` 幂等重试：
+
+```bash
+curl -sS -X POST http://127.0.0.1:8720/api/policy/apply \
+  -H 'Authorization: Bearer <token>' \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: deploy-2026-11-03-001' \
+  -d '{
+        "dry_run": false,
+        "blacklist": ["203.0.113.9/32"],
+        "whitelist": ["10.0.0.0/8"],
+        "port_acl": [{"protocol": "tcp", "dport": 9999, "action": "drop"}]
+      }'
+```
+
+响应包含 `applied`、`dry_run`、`etag_before`、`etag_after` 与 `changes`（各段的 added/removed）。
+`dry_run: true` 只返回变更预览，不落数据面。同一 `Idempotency-Key`（10 分钟内）重放返回首次结果，
+并带 `x-idempotent-replay: true`。
+
+> 说明：该接口把策略应用到运行时；如需重启后保留，请同步写入配置文件并 `POST /api/config/reload`
+> 或 `systemctl reload xuanarmor`。返回的 `note` 字段会提示这一点。
+
+### GET /api/events?after_seq=N&limit=M
+
+按单调序号升序返回最近的攻击/丢弃事件，`after_seq` 传上次响应的 `latest_seq` 可实现增量拉取；
+`limit` 最大 500。响应含 `latest_seq`、`oldest_available_seq`（环形缓冲仅保留最近 1000 条）。
+
+```json
+{
+  "events": [
+    {"seq": 42, "timestamp_ns": 1762700123000000000, "src_ip": "203.0.113.9",
+     "protocol": 6, "rule_id": 2, "rule_name": "RATE_LIMIT", "dst_port": 443}
+  ],
+  "count": 1,
+  "after_seq": 41,
+  "latest_seq": 42,
+  "oldest_available_seq": 1,
+  "has_more": false
+}
+```
+
+### GET /api/events/stream?after_seq=N
+
+SSE 实时推送，事件类型 `attack`，`data` 为 `{events:[...], latest_seq}`。
+适合上游做实时告警/自动处置，无需轮询。
+
+### Token 管理
+
+| 方法 | 路径 | 角色 | 说明 |
+|---|---|---|---|
+| GET | `/api/tokens` | admin | 列出 Token 元数据（不含密钥） |
+| POST | `/api/tokens` | admin | 创建运行时 Token，密钥只在响应中返回一次 |
+| DELETE | `/api/tokens/{name}` | admin | 吊销运行时 Token（配置文件中的 Token 返回 404） |
+
+```bash
+curl -sS -X POST http://127.0.0.1:8720/api/tokens \
+  -H 'Authorization: Bearer <admin-token>' -H 'Content-Type: application/json' \
+  -d '{"name": "orchestrator-01", "role": "operator", "scopes": ["read", "write", "policy", "events"]}'
+# → {"name":"orchestrator-01","role":"operator","token":"<一次性密钥>", ...}
+```
+
+### 错误约定
+
+新增接口沿用统一错误结构 `{"error": "...", "code": "..."}`：
+
+| HTTP | code | 场景 |
+|---|---|---|
+| 400 | `empty_policy` / `invalid_config` | 空策略或校验失败 |
+| 401 | `unauthorized` | 缺少/错误 Token |
+| 403 | `forbidden` | 只读角色写操作、非 admin 管理 Token |
+| 404 | `token_not_found` | 吊销不存在的运行时 Token |
+| 409 | `token_create_failed` | Token 名称重复 |
+| 500 | `apply_failed` | 数据面应用失败 |
+
+**兼容性**：`api_token` / `readonly_token` 旧配置继续有效；未配置任何 Token 时保持旧行为
+（本机与外部均视为 admin，仅建议在完全可信的内网使用）。

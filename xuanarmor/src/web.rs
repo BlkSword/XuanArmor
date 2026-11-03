@@ -45,7 +45,7 @@ fn api_err_response(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 /// 计算 wall-clock Unix ns 与 CLOCK_MONOTONIC ns 之间的偏移。
-fn wall_clock_offset_ns() -> i128 {
+pub(crate) fn wall_clock_offset_ns() -> i128 {
     let wall_now_ns = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -54,7 +54,7 @@ fn wall_clock_offset_ns() -> i128 {
 }
 
 /// 把 eBPF 单调时钟 ns 转为 wall-clock Unix ns。
-fn monotonic_to_wall_ns(ts_ns: u64, offset_ns: i128) -> u64 {
+pub(crate) fn monotonic_to_wall_ns(ts_ns: u64, offset_ns: i128) -> u64 {
     (ts_ns as i128 + offset_ns).max(0) as u64
 }
 
@@ -159,6 +159,12 @@ pub struct WebState {
     pub login_limiter: Arc<LoginLimiter>,
     pub packet_log: Arc<PacketLog>,
     pub map_infos: Arc<Vec<MapInfo>>,
+    /// 服务启动时刻（用于 `/api/version` 的 uptime_s）
+    pub started_at: std::time::Instant,
+    /// 服务启动的 Unix 时间戳（秒）
+    pub started_unix: u64,
+    /// 写接口幂等缓存：Idempotency-Key -> (时间, 状态码, 响应体)
+    pub idem: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::apictl::IdemEntry>>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -180,6 +186,12 @@ pub async fn run(
         login_limiter: Arc::new(LoginLimiter::new()),
         packet_log,
         map_infos,
+        started_at: std::time::Instant::now(),
+        started_unix: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        idem: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     });
 
     let public = Router::new()
@@ -244,6 +256,7 @@ pub async fn run(
         .route("/api/hub/proxy/nodes", get(hub_proxy_nodes_handler))
         .route("/api/hub/proxy/policies", get(hub_proxy_policies_handler))
         .route("/metrics", get(metrics_handler))
+        .merge(crate::apictl::router())
         .layer(middleware::from_fn(body_size_limit))
         .layer(middleware::from_fn(request_logger))
         .layer(middleware::from_fn_with_state(
@@ -810,7 +823,7 @@ async fn reload_config_handler(
     Ok("配置已从文件重新加载")
 }
 
-fn rule_display_name(rule_id: u16) -> &'static str {
+pub(crate) fn rule_display_name(rule_id: u16) -> &'static str {
     use xuanarmor_common::rules;
     match rule_id {
         rules::BLACKLIST => "黑名单",

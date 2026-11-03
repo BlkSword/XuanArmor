@@ -153,6 +153,8 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 | CLI 与 TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach`。 |
 | 配置热加载 | 通过 `SIGHUP` 或 `systemctl reload` 重新加载配置。 |
 | 认证与 RBAC-lite | 可选 Bearer Token；v0.5.0 新增只读 Token（只允许 GET/HEAD），本机回环请求跳过 Token 校验。 |
+| 上游编排 API | `POST /api/policy/apply` 原子下发策略（dry-run、差异返回、`Idempotency-Key` 幂等）、`GET /api/events` 游标与 SSE 推送、`GET /api/version` 能力探测、`GET /api/openapi.json`；详见 [docs/api.md](docs/api.md#上游编排-apiv052)。 |
+| 多 Token | `[[api_tokens]]` 支持 admin/operator/readonly 角色与作用域，运行时创建/吊销；审计可定位调用方。 |
 | 持久化 | 动态规则与时序指标写入 redb，进程重启后恢复。 |
 | 审计 | 内存或 JSON Lines 审计后端（带 `seq`/`prev_hash`/`hash` 哈希链），支持 SSE 实时流、CSV 导出与 `GET /api/audit/verify` 防篡改校验。 |
 | 指标 | Prometheus `/metrics`、JSON `/api/stats`、map 水位 `/api/map-usage`。 |

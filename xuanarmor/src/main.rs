@@ -1,5 +1,6 @@
 mod adaptive;
 mod alert;
+mod apictl;
 mod audit;
 mod auth;
 mod blacklist_sync;
@@ -524,7 +525,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
             );
             Some(token)
         });
-    let auth = AuthState::with_readonly(api_token, config.readonly_token.clone());
+    let auth = AuthState::from_config(api_token, config.readonly_token.clone(), &config.api_tokens);
 
     // 控制面：封装所有 eBPF Map 操作，供 Web / CLI / SIGHUP 使用
     let control = Arc::new(

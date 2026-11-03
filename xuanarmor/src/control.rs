@@ -39,6 +39,8 @@ pub struct ControlState {
     pub hub_active_url: std::sync::Mutex<String>,
     pub hub_config: crate::config::HubConfig,
     adaptive: Option<Arc<AdaptiveEngine>>,
+    /// 最近一次成功应用到数据面的配置（`/api/policy` 与增量下发以其为基准）
+    applied_config: RwLock<Option<Config>>,
 }
 
 /// 运行时可读快照（用于 Web / CLI 展示）。
@@ -155,6 +157,7 @@ impl ControlState {
             hub_active_url: std::sync::Mutex::new(String::new()),
             hub_config: config.hub.clone(),
             adaptive,
+            applied_config: RwLock::new(None),
         };
 
         // 初始化运行时配置与策略
@@ -180,32 +183,53 @@ impl ControlState {
         Ok(state)
     }
 
+    /// 当前生效配置：优先返回最近一次成功应用到数据面的配置，
+    /// 未应用过时回退读取配置文件。
+    pub async fn current_config(&self) -> anyhow::Result<Config> {
+        if let Some(config) = self.applied_config.read().await.clone() {
+            return Ok(config);
+        }
+        Config::from_file(&self.config_path)
+    }
+
     /// 从配置文件重新加载全部策略。
     pub async fn reload_config_file(&self) -> anyhow::Result<()> {
         let config = Config::from_file(&self.config_path)?;
         config
             .validate()
             .context("配置校验失败，拒绝热加载以避免部分策略生效")?;
+        self.apply_runtime_config(&config).await?;
+        self.audit("system", AuditAction::ReloadConfig, serde_json::json!({}))
+            .await;
+        Ok(())
+    }
+
+    /// 把一份已校验的配置原子应用到数据面。
+    ///
+    /// 供 `SIGHUP` 热加载与 `POST /api/policy/apply` 复用：先重建所有策略 Map，
+    /// 最后写 `CONFIG`，避免 `geoip.default_action = drop` 时中间窗口切断管理连接。
+    pub async fn apply_runtime_config(&self, config: &Config) -> anyhow::Result<()> {
+        config.validate()?;
         let mut guard = self.ebpf.lock().await;
         let mut whitelist = self.whitelist.lock().await;
         let mut blacklist = self.blacklist.lock().await;
         let mut geoip_blocks = self.geoip_blocks.lock().await;
         let mut geoip_allows = self.geoip_allows.lock().await;
 
-        init_rate_limit_map(&mut guard, &config)?;
-        init_port_rate_map(&mut guard, &config)?;
+        init_rate_limit_map(&mut guard, config)?;
+        init_port_rate_map(&mut guard, config)?;
         init_l7_patterns_map(&mut guard, &config.l7_scan.patterns)?;
         init_port_acl_map(&mut guard, &config.port_acl)?;
         init_protection_projects_map(&mut guard, &config.protection_projects)?;
-        apply_whitelist_map(&mut guard, &config, &mut whitelist).await?;
-        apply_blacklist_map(&mut guard, &config, &mut blacklist).await?;
-        apply_geoip_map(&mut guard, &config, &mut geoip_blocks, &mut geoip_allows).await?;
+        apply_whitelist_map(&mut guard, config, &mut whitelist).await?;
+        apply_blacklist_map(&mut guard, config, &mut blacklist).await?;
+        apply_geoip_map(&mut guard, config, &mut geoip_blocks, &mut geoip_allows).await?;
         // CONFIG 最后写入，避免 geoip_default_action 先翻到 drop、allow 列表尚未重建
         // 导致管理连接被自己切断（见 docs/test-report-2026-10.md 6.1）。
-        init_config_map(&mut guard, &config)?;
+        init_config_map(&mut guard, config)?;
 
         let prev_danger = self.runtime.read().await.danger_level;
-        let mut new_snapshot = RuntimeConfigSnapshot::from_config(&config);
+        let mut new_snapshot = RuntimeConfigSnapshot::from_config(config);
         new_snapshot.danger_level = prev_danger;
         *self.runtime.write().await = new_snapshot;
         if let Some(adaptive) = &self.adaptive {
@@ -219,10 +243,13 @@ impl ControlState {
         if let Err(e) = self.load_persisted_rules().await {
             tracing::warn!("failed to reload persisted rules: {}", e);
         }
-
-        self.audit("system", AuditAction::ReloadConfig, serde_json::json!({}))
-            .await;
+        *self.applied_config.write().await = Some(config.clone());
         Ok(())
+    }
+
+    /// 通过 API 下发策略后写审计（含调用方身份）。
+    pub async fn audit_policy_applied(&self, actor: &str, detail: serde_json::Value) {
+        self.audit(actor, AuditAction::ReloadConfig, detail).await;
     }
 
     /// 实时封禁某个 IP（API 控制）。支持 IPv4/IPv6。

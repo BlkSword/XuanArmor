@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — 上游编排 API
+
+### 新增
+
+- 多 Token 与角色/作用域：`[[api_tokens]]`（name/token/role/scopes），
+  角色 `admin` / `operator` / `readonly`；兼容 `api_token`、`readonly_token` 旧配置。
+  `GET/POST /api/tokens`、`DELETE /api/tokens/{name}` 支持运行时创建与吊销（仅 admin）。
+- `POST /api/policy/apply`：原子下发 whitelist/blacklist/port_acl/保护项目/L7/GeoIP/限速策略，
+  支持 `dry_run` 预演、`changes` 差异返回与 `Idempotency-Key` 幂等重放；
+  `GET /api/policy` 返回运行时生效策略与 `etag`。
+- `GET /api/events?after_seq=&limit=`：攻击事件按单调序号增量拉取；
+  `GET /api/events/stream`：SSE 实时推送（事件类型 `attack`）。
+- `GET /api/version`：版本、API schema、能力清单与运行信息，供上游能力探测。
+- `GET /api/openapi.json`：OpenAPI 3 描述，便于生成客户端 SDK。
+- `POST /api/config/validate`：下发前校验配置（TOML 文本或 JSON）。
+- 集成测试 `tests/api_control_test.sh`（22 项断言）。
+
+### 变更
+
+- `GET /api/policy` 读取运行时生效策略（不再只读配置文件），与 `apply` 结果保持一致。
+- JWT 无变化；控制台登录 Cookie 逻辑不变。
+
 ## 0.5.2 (2026-11-02) — 统一命名 XuanArmor
 
 ### 变更（不兼容）

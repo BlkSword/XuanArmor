@@ -5,6 +5,24 @@
 > 覆盖日常运维、升级/回滚/卸载、认证与 RBAC、审计链校验、map 水位告警、低内存行为与故障排查。
 > 容量与规格见 [capacity-planning.md](capacity-planning.md)；能力边界见 [capability-boundaries.md](capability-boundaries.md)。
 
+## 上游编排 Token（v0.5.2，未发布）
+
+编排系统/上游应用建议使用独立 Token，便于按调用方审计与单独吊销：
+
+```toml
+[[api_tokens]]
+name = "orchestrator-prod"
+token = "orchestrator-token-0123456789abcdef"
+role = "operator"           # admin / operator / readonly
+scopes = ["read", "write", "policy", "events"]
+```
+
+- `operator` 可读可写策略，但不能管理 Token；`readonly` 仅 GET/HEAD；`admin` 全部权限。
+- 运行时可通过 `POST /api/tokens` 创建临时 Token（返回一次密钥），`DELETE /api/tokens/{name}` 吊销；
+  服务重启后运行时 Token 失效。
+- 旧配置 `api_token` / `readonly_token` 继续有效（分别等价 admin / readonly）。
+- 策略下发接口与事件接口见 `docs/api.md`「上游编排 API」。
+
 ## `/ready` 返回 503 的含义（v0.4.8）
 
 `/ready` 不再只表示"进程活着"，而是"XDP 程序确实挂在网卡上"。返回 503 且
