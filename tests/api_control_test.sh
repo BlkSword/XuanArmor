@@ -187,6 +187,24 @@ CODE="$(api GET /api/events "$ADMIN")"
     && jq -e '.events | type == "array"' "$WORK/resp.json" >/dev/null 2>&1 \
     && ok "GET /api/events 结构正确" || bad "GET /api/events 异常"
 
+log "==> 8. 重置密码"
+CODE="$(api POST /api/auth/reset-token "$ADMIN")"
+NEW_TOKEN="$(jget .token)"
+if [ "$CODE" = "200" ] && [ -n "$NEW_TOKEN" ] && [ "$NEW_TOKEN" != "null" ]; then
+    ok "reset-token 返回新密码"
+else
+    bad "reset-token 失败（$CODE）"
+fi
+if grep -qF "$NEW_TOKEN" "$WORK/config.toml"; then
+    ok "新密码已写入配置文件"
+else
+    bad "新密码未写入配置文件"
+fi
+CODE="$(api GET /api/version "$ADMIN")"
+[ "$CODE" = "401" ] && ok "旧密码立即失效" || bad "旧密码仍可用（$CODE）"
+CODE="$(api GET /api/version "$NEW_TOKEN")"
+[ "$CODE" = "200" ] && ok "新密码可访问" || bad "新密码不可用（$CODE）"
+
 log
 log "================ API 测试结果 ================"
 log "PASS=$PASS FAIL=$FAIL"

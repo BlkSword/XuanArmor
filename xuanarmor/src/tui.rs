@@ -110,7 +110,7 @@ fn draw(f: &mut ratatui::Frame, snapshot: Option<&StatsSnapshot>) {
         ])
         .split(f.area());
 
-    let title = Paragraph::new("XuanArmor // 主机级 CC 防御盾")
+    let title = Paragraph::new("XuanArmor // 主机级 L3-L4 DDoS 清洗盾")
         .style(
             Style::default()
                 .fg(Color::Cyan)

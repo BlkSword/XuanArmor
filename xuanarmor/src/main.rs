@@ -510,21 +510,26 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         cooldown_s: config.alert_cooldown_s,
         interface: config.interface.clone(),
     });
-    // 若未配置 api_token，则自动生成随机 Token。
-    // 为降低日志泄露风险，仅输出 token 前缀；完整 Token 可用本机
-    // `xuanarmor reset-token`（自动生成并打印新 Token）获取。
-    let api_token = config
-        .api_token
-        .clone()
-        .filter(|t| !t.is_empty())
-        .or_else(|| {
+    // 若未配置 api_token，则自动生成随机 Token 并写回配置文件，
+    // 同时在控制台打印一次完整密码（服务重启后从配置文件读取，不再变化）。
+    let api_token = match config.api_token.clone().filter(|t| !t.is_empty()) {
+        Some(token) => Some(token),
+        None => {
             let token = format!("{:032x}", rand::random::<u128>());
-            warn!(
-                "api_token not configured; generated random console access token (prefix): {}...",
-                &token[..8]
-            );
+            match crate::config::persist_api_token(&config_path, &token) {
+                Ok(()) => info!("api_token 未配置：已生成控制台密码并写入 {}", config_path),
+                Err(e) => warn!("api_token 未配置且写回配置失败（{e:#}）；本次运行使用临时密码"),
+            }
+            println!();
+            println!("============================================================");
+            println!("  控制台密码（仅本次显示）: {token}");
+            println!("  控制台地址: http://<服务器IP>:8720/");
+            println!("  重置密码:   sudo xuanarmor reset-token");
+            println!("============================================================");
+            println!();
             Some(token)
-        });
+        }
+    };
     let auth = AuthState::from_config(api_token, config.readonly_token.clone(), &config.api_tokens);
 
     // 控制面：封装所有 eBPF Map 操作，供 Web / CLI / SIGHUP 使用

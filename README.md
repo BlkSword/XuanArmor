@@ -13,6 +13,9 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 
 ## 快速开始（一键部署）
 
+安装完成后会输出**控制台地址**与**控制台密码**（密码只在安装时显示一次，请立即保存；
+忘记可用 `sudo xuanarmor reset-token` 重置）。
+
 > 从旧版本（≤ 0.5.1，命令名 `eshield`）升级：直接执行上面的一键命令即可，
 > 安装脚本会自动停止旧服务、迁移配置与数据到 `/etc/xuanarmor`、`/var/lib/xuanarmor`，
 > 并创建 `/usr/local/bin/eshield` → `xuanarmor` 兼容软链。

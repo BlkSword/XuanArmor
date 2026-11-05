@@ -610,6 +610,10 @@ async fn reset_token_handler(
     headers: axum::http::HeaderMap,
 ) -> Response {
     let new_token = state.auth.reset_token().await;
+    // 持久化到配置文件，避免服务重启后回退到旧密码。
+    if let Err(e) = crate::config::persist_api_token(&state.control.config_path, &new_token) {
+        tracing::warn!("重置密码后写回配置失败: {e:#}");
+    }
     state
         .auditor
         .log(

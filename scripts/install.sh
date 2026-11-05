@@ -493,6 +493,16 @@ MOUNTUNIT
     fi
 fi
 
+CONSOLE_TOKEN=""
+CONSOLE_TOKEN_NEW=0
+if [ -f "$INSTALL_CFG" ]; then
+    CONSOLE_TOKEN="$(sed -nE 's/^[[:space:]]*api_token[[:space:]]*=[[:space:]]*"([^"]*)".*/\1/p' "$INSTALL_CFG" | head -1)"
+fi
+if [ -z "$CONSOLE_TOKEN" ]; then
+    CONSOLE_TOKEN="$(gen_console_token)"
+    CONSOLE_TOKEN_NEW=1
+fi
+
 if [ ! -f "$INSTALL_CFG" ]; then
     cat > "$INSTALL_CFG" <<'EOF'
 # 要挂载 XDP 的网卡
@@ -577,11 +587,21 @@ default_action = "pass"
 [threat_intel]
 enabled = false
 EOF
-    # 使用探测到的活动网卡，而不是硬编码 eth0
+
+    # 写入安装时生成的控制台密码（仅在安装输出中显示一次）
+    if [ "$CONSOLE_TOKEN_NEW" = "1" ]; then
+        sed -i "s|^# api_token = \"changeme\"|api_token = \"${CONSOLE_TOKEN}\"|" "$INSTALL_CFG"
+    fi    # 使用探测到的活动网卡，而不是硬编码 eth0
     if [ "$DEFAULT_IFACE" != "eth0" ]; then
         sed -i "s/^interface = \"eth0\"/interface = \"${DEFAULT_IFACE}\"/" "$INSTALL_CFG"
     fi
     echo "已创建默认配置文件: $INSTALL_CFG"
+fi
+
+# 已有配置但没有 api_token：写入安装时生成的控制台密码
+if [ -f "$INSTALL_CFG" ] && ! grep -qE '^[[:space:]]*api_token[[:space:]]*=' "$INSTALL_CFG"; then
+    sed -i "/^interface[[:space:]]*=/a api_token = \"${CONSOLE_TOKEN}\"" "$INSTALL_CFG"
+    info "已向现有配置写入控制台密码"
 fi
 
 if [ -f "packaging/xuanarmor.service" ]; then
@@ -661,6 +681,11 @@ echo -e " ${GREEN}XuanArmor v${VERSION} 安装完成${NC}"
 echo "========================================="
 echo ""
 echo "  控制台地址:  http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo '<服务器IP>'):${WEB_PORT}"
+if [ -n "$CONSOLE_TOKEN" ]; then
+    echo ""
+    echo -e "  ${GREEN}控制台密码:  ${CONSOLE_TOKEN}${NC}"
+    echo "  （仅在本次安装输出一次，请立即保存；忘记可执行: sudo xuanarmor reset-token）"
+fi
 echo "  配置文件:    ${INSTALL_CFG}"
 echo "  二进制路径:  ${INSTALL_BIN}"
 echo "  持久化存储:  ${STORE_PATH}"

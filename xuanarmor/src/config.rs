@@ -751,6 +751,42 @@ impl Config {
         Ok(config)
     }
 
+    /// 将控制台访问 Token 写回配置文件（保留其他内容，原子替换）。
+    ///
+    /// 用于：安装后未配置 `api_token` 时的自动生成、`reset-token` 重置后持久化。
+    pub fn persist_api_token(path: &str, token: &str) -> anyhow::Result<()> {
+        let content =
+            fs::read_to_string(path).with_context(|| format!("无法读取配置文件 {path}"))?;
+        let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let mut api_idx: Option<usize> = None;
+        let mut iface_idx: Option<usize> = None;
+        let mut first_section: Option<usize> = None;
+        for (i, line) in lines.iter().enumerate() {
+            let t = line.trim_start();
+            if api_idx.is_none() && t.starts_with("api_token") && t.contains('=') {
+                api_idx = Some(i);
+            }
+            if iface_idx.is_none() && t.starts_with("interface") && t.contains('=') {
+                iface_idx = Some(i);
+            }
+            if first_section.is_none() && t.starts_with('[') {
+                first_section = Some(i);
+            }
+        }
+        match api_idx {
+            Some(i) => lines[i] = format!("api_token = \"{token}\""),
+            None => {
+                let at = iface_idx.map(|i| i + 1).or(first_section).unwrap_or(0);
+                lines.insert(at.min(lines.len()), format!("api_token = \"{token}\""));
+            }
+        }
+        let tmp = format!("{path}.tmp.{}", std::process::id());
+        fs::write(&tmp, lines.join("\n") + "\n")
+            .with_context(|| format!("无法写入临时配置 {tmp}"))?;
+        fs::rename(&tmp, path).with_context(|| format!("无法替换配置文件 {path}"))?;
+        Ok(())
+    }
+
     pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let content = fs::read_to_string(path).context("failed to read config file")?;
         let mut config: Config = toml::from_str(&content).context("failed to parse config file")?;
