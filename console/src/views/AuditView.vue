@@ -51,7 +51,7 @@ const lastEntry = computed(() => rows.value[0])
   <div class="page">
     <div class="page-head">
       <div class="page-title">审计日志</div>
-      <div class="page-meta">控制面所有写操作均落盘，并支持 SSE 推送</div>
+      <div class="page-meta">写操作审计</div>
       <div class="page-actions">
         <span class="state"><span class="dot live"></span>SSE 推送</span>
         <button class="btn btn-sm" :disabled="verifying" @click="verifyChain">

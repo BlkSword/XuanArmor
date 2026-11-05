@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import PanelCard from '../components/PanelCard.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
-import BarList from '../components/BarList.vue'
 import { api } from '../api/client'
 import { toast } from '../stores/app'
-import { threatFeeds } from '../api/mock'
-import { fmtInt } from '../utils/format'
 
 const enabled = ref(false)
 const defaultAction = ref<'pass' | 'drop'>('pass')
@@ -15,14 +12,6 @@ const allowCountries = ref('')
 const asns = ref('')
 const csvPath = ref('/etc/xuanarmor/geoip.csv')
 const loading = ref(false)
-
-const distribution = computed(() => [
-  { label: 'CN', value: 62, tone: 'accent' as const },
-  { label: 'US', value: 18, tone: 'muted' as const },
-  { label: 'RU', value: 9, tone: 'danger' as const },
-  { label: 'SG', value: 6, tone: 'muted' as const },
-  { label: 'OTHER', value: 5, tone: 'muted' as const },
-])
 
 onMounted(async () => {
   const cfg = await api.config()
@@ -57,21 +46,13 @@ async function reload() {
     loading.value = false
   }
 }
-async function syncIntel() {
-  try {
-    await api.syncThreatIntel()
-    toast('威胁情报同步已触发', '稍后刷新查看结果', 'ok')
-  } catch (e) {
-    toast('同步失败', String(e), 'danger')
-  }
-}
 </script>
 
 <template>
   <div class="page">
     <div class="page-head">
       <div class="page-title">GeoIP 与情报</div>
-      <div class="page-meta">按国家/地区或 ASN 决定放行或阻断；威胁情报定时写入动态黑名单</div>
+      <div class="page-meta">按国家/ASN 放行或阻断</div>
       <div class="page-actions">
         <span class="state" :class="enabled ? 'ok' : ''"><span class="dot" :class="enabled ? 'ok' : ''"></span>{{ enabled ? '已启用' : '已停用' }}</span>
         <button class="btn btn-sm" :disabled="loading" @click="reload">重载 CSV</button>
@@ -109,30 +90,7 @@ async function syncIntel() {
         </div>
       </PanelCard>
 
-      <PanelCard title="地理分布" sub="按来源国家聚合（演示数据）">
-        <BarList :items="distribution" :format="(v: number) => v + '%'" />
-      </PanelCard>
     </div>
 
-    <PanelCard title="威胁情报源" sub="定时拉取并写入动态黑名单" flush>
-      <template #actions><button class="btn btn-sm" @click="syncIntel()">立即同步</button></template>
-      <div class="table-wrap">
-        <table class="dt">
-          <thead><tr><th>名称</th><th>地址</th><th>间隔</th><th class="col-num">置信度</th><th class="col-num">条目数</th><th>最近同步</th><th>状态</th></tr></thead>
-          <tbody>
-            <tr v-for="f in threatFeeds" :key="f.name">
-              <td class="cell-main">{{ f.name }}</td>
-              <td class="mono muted" style="max-width: 360px; overflow: hidden; text-overflow: ellipsis">{{ f.url }}</td>
-              <td class="muted">{{ f.interval }}</td>
-              <td class="col-num mono">{{ f.confidence }}</td>
-              <td class="col-num mono">{{ fmtInt(f.entries) }}</td>
-              <td class="muted">{{ f.last }}</td>
-              <td><span class="state ok"><span class="dot ok"></span>正常</span></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-      <div class="panel-note">威胁情报由节点定时拉取；Hub 部署时可由 Hub 统一拉取后分发，避免重复出口流量。</div>
-    </PanelCard>
   </div>
 </template>

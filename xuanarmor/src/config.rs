@@ -393,12 +393,16 @@ impl Default for HubConfig {
 /// 采样包日志配置（v0.4.2）
 #[derive(Debug, Clone, Deserialize)]
 pub struct PacketLogConfig {
-    #[serde(default = "default_false")]
+    /// 默认开启（v0.5.2 纠偏）：只保留采样条目，占用可控。
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_packet_log_sample_rate")]
     pub sample_rate: u16,
     #[serde(default = "default_packet_log_memory_max_entries")]
     pub memory_max_entries: usize,
+    /// 采样条目占用上限（字节）；超过后自动清理最旧条目。
+    #[serde(default = "default_packet_log_max_bytes")]
+    pub max_bytes: usize,
     /// 是否在前端展示 payload 十六进制（当前默认开启，保留供后续细粒度控制）
     #[serde(default = "default_true")]
     #[allow(dead_code)]
@@ -408,12 +412,17 @@ pub struct PacketLogConfig {
 impl Default for PacketLogConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             sample_rate: default_packet_log_sample_rate(),
             memory_max_entries: default_packet_log_memory_max_entries(),
+            max_bytes: default_packet_log_max_bytes(),
             payload_hex: true,
         }
     }
+}
+
+fn default_packet_log_max_bytes() -> usize {
+    8 * 1024 * 1024
 }
 
 fn default_packet_log_sample_rate() -> u16 {

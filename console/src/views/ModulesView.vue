@@ -45,7 +45,7 @@ function compact(n: number | null) {
   <div class="page">
     <div class="page-head">
       <div class="page-title">防护模块</div>
-      <div class="page-meta">运行时热生效，无需重启；开关会直接写入数据面运行时配置</div>
+      <div class="page-meta">开关即时生效</div>
       <div class="page-actions">
         <span class="state" :class="loading ? 'warn' : 'ok'"><span class="dot" :class="loading ? 'warn' : 'ok'"></span>{{ loading ? '加载中' : `${enabledCount} / ${modules.length} 启用` }}</span>
       </div>

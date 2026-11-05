@@ -4,7 +4,6 @@ import { closeDrawer, drawer } from '../stores/ui'
 import { api } from '../api/client'
 import { toast } from '../stores/app'
 import { fmtAgo, fmtDateTime, fmtInt } from '../utils/format'
-import { makeAttackEvents } from '../api/mock'
 import TagPill from './TagPill.vue'
 import Sparkline from './Sparkline.vue'
 import type { SeriesPoint } from '../api/types'
@@ -59,7 +58,7 @@ const recent = computed(() => {
       dst_port: s.dst_port,
     }))
   }
-  return makeAttackEvents(400).filter((e) => e.src_ip === ip.value).slice(0, 8)
+  return []
 })
 
 async function block() {

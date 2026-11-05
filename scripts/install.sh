@@ -63,6 +63,15 @@ USAGE
 done
 
 # GitHub 仓库（与 scripts/publish-release.sh 保持一致；可用 XUANARMOR_REPO 覆盖）
+# 生成控制台访问密码（32 字节随机 hex）
+gen_console_token() {
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -hex 32
+    else
+        head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+    fi
+}
+
 REPO="${XUANARMOR_REPO:-${ESHIELD_REPO:-BlkSword/XuanArmor}}"
 # 优先从环境变量读取版本；未设置时依次尝试 workspace / xuanarmor crate 的 Cargo.toml；最后回退到默认版本。
 DEFAULT_VERSION="0.5.2"
@@ -371,6 +380,7 @@ download_release() {
 # 旧版本不认识该子命令，回退为"停服 → 安装 → 启动"。
 smooth_upgrade() {
     local new_bin="$1"
+    chmod 755 "$new_bin" 2>/dev/null || true
     if [ ! -x "$INSTALL_BIN" ] || ! "$INSTALL_BIN" upgrade --help >/dev/null 2>&1; then
         return 1
     fi
@@ -517,6 +527,13 @@ icmp_flood_enabled = false
 tcp_reset_on_drop = false
 
 web_bind = "0.0.0.0:8720"
+
+# 包日志（v0.5.2 起默认开启，内存环形缓冲，超限自动清理最旧条目）
+[packet_log]
+enabled = true
+sample_rate = 16
+memory_max_entries = 10000
+max_bytes = 8388608
 # 未设置时进程会启动时生成随机 Token 并在日志输出前缀，外部访问仍必须携带；
 # 本机 127.0.0.1/::1 免校验（供 CLI/TUI 使用）。
 # api_token = "changeme"

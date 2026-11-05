@@ -21,6 +21,7 @@ export const state = {
 }
 
 export function getToken() { return state.token }
+export const demoMode = () => state.mode === 'mock'
 export function setToken(t: string) { state.token = t }
 
 // ---------------------------------------------------------------- mock state
@@ -75,9 +76,9 @@ function modulePatch(id: string, enabled: boolean): Record<string, unknown> {
     case 'trust_score': return { trust_enabled: enabled }
     case 'rate_limit': return { rate_limit_enabled: enabled }
     case 'port_rate_limit':
-      return { port_rate_limit: { enabled, threshold: 2000, tick_ms: 100, decay_num: 7, decay_den: 8, block_duration_s: 300 } }
+      return { port_rate_limit: { enabled } }
     case 'adaptive':
-      return { adaptive: { enabled, threshold: 10, window_s: 5, block_duration_s: 300 } }
+      return { adaptive: { enabled } }
     default: return {}
   }
 }
@@ -193,6 +194,7 @@ function normalizeWhitelist(raw: any): WhitelistEntry[] {
 }
 
 // ---------------------------------------------------------------- transport
+/** 统一解析响应：JSON 正常解析；纯文本/空响应不再抛 SyntaxError，而是包装成 {ok,message}。 */
 async function raw<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (state.token) headers.Authorization = `Bearer ${state.token}`
@@ -201,12 +203,27 @@ async function raw<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { ...headers, ...(init?.headers || {}) },
   })
-  if (!res.ok) throw new Error(res.status === 401 ? 'unauthorized' : `HTTP ${res.status}`)
+  if (!res.ok) {
+    // 401/403 单独标记，便于页面区分"未登录"与"服务异常"。
+    if (res.status === 401) throw new Error('unauthorized')
+    if (res.status === 403) throw new Error('forbidden')
+    const text = await res.text().catch(() => '')
+    throw new Error(`HTTP ${res.status}${text ? ` ${text.slice(0, 120)}` : ''}`)
+  }
   const text = await res.text()
-  return (text ? JSON.parse(text) : null) as T
+  if (!text) return null as T
+  const contentType = res.headers.get('content-type') || ''
+  if (!contentType.includes('json')) {
+    return { ok: true, message: text } as unknown as T
+  }
+  try {
+    return JSON.parse(text) as T
+  } catch {
+    return { ok: true, message: text } as unknown as T
+  }
 }
 
-/// Read path with auto fallback. Returns null when the caller should use mock data.
+/** 读接口：live/auto 模式失败时返回 null（页面显示空状态），不再静默回退演示数据。 */
 async function fetchOrNull<T>(path: string): Promise<T | null> {
   if (state.mode === 'mock') return null
   try {
@@ -220,27 +237,29 @@ async function fetchOrNull<T>(path: string): Promise<T | null> {
   }
 }
 
-/// Mutations never silently fall back; demo mode (file:// or ?mock=1) mutates local state.
-async function mutate(path: string, body: unknown): Promise<void> {
-  if (state.mode !== 'mock') {
-    try {
-      await raw(path, { method: 'POST', body: JSON.stringify(body) })
-      state.live = true
-      return
-    } catch (err) {
-      if (state.mode === 'live') throw err
-      state.live = false
-    }
-  }
+/** 写接口：失败必须抛出，避免"看起来成功实际没生效"。 */
+async function mutate(path: string, body: unknown, method = 'POST'): Promise<void> {
+  if (state.mode === 'mock') return
+  await raw(path, { method, body: JSON.stringify(body) })
+  state.live = true
+}
+
+function emptyStats(): Stats {
+  return {
+    total_packets: 0, total_passed: 0, total_dropped: 0,
+    current_pps: 0, current_dps: 0, danger_level: 0,
+    blacklist_blocked: 0, rate_limited: 0, syn_flood_blocked: 0,
+    udp_flood_blocked: 0, icmp_flood_blocked: 0, l7_blocked: 0,
+    geoip_blocked: 0, conn_track_blocked: 0, adaptive_blocked: 0,
+    trust_trusted: 0, trust_neutral: 0, trust_suspicious: 0, trust_malicious: 0,
+    xdp_attached: false, xdp_mode: 'unknown', uptime_s: 0,
+    port_rate_blocked: 0, fragment_blocked: 0,
+  } as unknown as Stats
 }
 
 export const api = {
   isLive: () => state.live,
 
-  /**
-   * 校验当前凭据并返回角色（v0.5.0：/api/auth/check 由纯文本 OK 改为 JSON `{role}`）。
-   * 返回 null 表示凭据无效（401/403）；演示模式默认 admin。
-   */
   async authCheck(): Promise<Role | null> {
     if (state.mode === 'mock') return 'admin'
     try {
@@ -248,23 +267,24 @@ export const api = {
       if (state.token) headers.Authorization = `Bearer ${state.token}`
       const res = await fetch('/api/auth/check', { credentials: 'same-origin', headers })
       if (!res.ok) return null
-      // 兼容旧版纯文本 OK：解析失败时按 admin 处理。
       const body = await res.json().catch(() => null)
       return body?.role === 'readonly' ? 'readonly' : 'admin'
     } catch (err) {
       if (state.mode === 'live') throw err
+      state.live = false
       return null
     }
   },
 
   async stats(): Promise<Stats> {
+    if (state.mode === 'mock') return mock.makeStats()
     const r = await fetchOrNull<Stats>('/api/stats')
-    return r ?? mock.makeStats()
+    return r ?? emptyStats()
   },
-  /** eBPF map 水位（v0.5.0）：条目数 / 上限 / 使用率。 */
   async mapUsage(): Promise<MapUsage> {
+    if (state.mode === 'mock') return mock.makeMapUsage()
     const r = await fetchOrNull<any>('/api/map-usage')
-    if (!r) return mock.makeMapUsage()
+    if (!r) return { maps: [], warn_threshold: 0.8, sampled_ns: 0 }
     const maps: any[] = Array.isArray(r.maps) ? r.maps : []
     return {
       maps: maps.map((m: any) => {
@@ -283,10 +303,10 @@ export const api = {
       sampled_ns: Number(r.sampled_ns ?? 0),
     }
   },
-  /** 审计哈希链校验（v0.5.0）：返回链是否完整、校验条数与首个断点。 */
   async auditVerify(): Promise<AuditVerifyReport> {
+    if (state.mode === 'mock') return mock.makeAuditVerify()
     const r = await fetchOrNull<any>('/api/audit/verify')
-    if (!r) return mock.makeAuditVerify()
+    if (!r) return { ok: false, enabled: false, checked: 0, first_bad_seq: null }
     return {
       ok: !!r.ok,
       enabled: r.enabled !== false,
@@ -296,43 +316,56 @@ export const api = {
       path: r.path ? String(r.path) : undefined,
     }
   },
-  async series(): Promise<SeriesPoint[]> {
-    const r = await fetchOrNull<any>('/api/metrics/series?duration_s=86400')
-    return r ? normalizeSeries(r) : (mockSeries = mock.makeSeries())
+  /** 流量曲线：duration_s 由时间范围选择器决定，图表随范围切换而变化。 */
+  async series(durationSeconds = 3600): Promise<SeriesPoint[]> {
+    if (state.mode === 'mock') {
+      mockSeries = mock.makeSeries(Math.max(24, Math.min(120, Math.round(durationSeconds / 60))))
+      return mockSeries
+    }
+    const r = await fetchOrNull<any>(`/api/metrics/series?duration_s=${Math.max(60, Math.floor(durationSeconds))}`)
+    return r ? normalizeSeries(r) : []
   },
   async attackEvents(): Promise<AttackEvent[]> {
+    if (state.mode === 'mock') return mock.makeAttackEvents()
     const r = await fetchOrNull<any>('/api/attack-events?limit=200')
-    return r ? normalizeEvents(r) : (mockEvents = mock.makeAttackEvents())
+    return r ? normalizeEvents(r) : []
   },
   async packets(): Promise<PacketSample[]> {
+    if (state.mode === 'mock') return mock.makePacketSamples()
     const r = await fetchOrNull<any>('/api/packets?limit=200')
-    return r ? normalizePackets(r) : mockPackets
+    return r ? normalizePackets(r) : []
   },
   async audit(): Promise<AuditEntry[]> {
+    if (state.mode === 'mock') return mock.makeAudit()
     const r = await fetchOrNull<any>('/api/audit?limit=200')
-    return r ? normalizeAudit(r) : mockAudit
+    return r ? normalizeAudit(r) : []
   },
   async blacklist(): Promise<BlockEntry[]> {
+    if (state.mode === 'mock') return mock.makeBlacklist()
     const r = await fetchOrNull<any>('/api/blacklist')
-    return r ? normalizeBlocks(r) : mockBlocks
+    return r ? normalizeBlocks(r) : []
   },
   async whitelist(): Promise<WhitelistEntry[]> {
+    if (state.mode === 'mock') return mock.whitelist.map((w) => ({ ...w }))
     const r = await fetchOrNull<any>('/api/whitelist')
-    return r ? normalizeWhitelist(r) : mockWhitelist
+    return r ? normalizeWhitelist(r) : []
   },
   async portAcl(): Promise<PortAclEntry[]> {
+    if (state.mode === 'mock') return mock.portAcl.map((a) => ({ ...a }))
     const r = await fetchOrNull<any>('/api/port-acl')
-    const list = r ? (r.items || r) : mockAcl
+    const list = r ? (r.items || r) : []
     return list.map((a: any) => ({ protocol: String(a.protocol), dport: String(a.dport), action: String(a.action) }))
   },
   async l7Patterns(): Promise<L7Pattern[]> {
+    if (state.mode === 'mock') return mock.l7Patterns.map((p) => ({ ...p }))
     const r = await fetchOrNull<any>('/api/l7-patterns')
-    const list = r ? (r.patterns || r) : mockL7
+    const list = r ? (r.patterns || r) : []
     return list.map((p: any) => ({ pattern: String(p.pattern ?? ''), mask: p.mask || undefined }))
   },
   async projects(): Promise<ProtectionProject[]> {
+    if (state.mode === 'mock') return mock.projects.map((p) => ({ ...p }))
     const r = await fetchOrNull<any>('/api/protection-projects')
-    const list = r ? (r.projects || r) : mockProjects
+    const list = r ? (r.projects || r) : []
     return list.map((p: any) => ({
       name: String(p.name ?? ''), description: String(p.description ?? ''),
       protocol: String(p.protocol ?? 'tcp'), dport: String(p.dport ?? ''),
@@ -343,17 +376,16 @@ export const api = {
     }))
   },
   async config(): Promise<ConfigSnapshot> {
+    if (state.mode === 'mock') return mock.makeConfig()
     const r = await fetchOrNull<any>('/api/config')
-    return (r ? { ...mockConfig, ...r } : mockConfig) as ConfigSnapshot
+    return (r ?? {}) as ConfigSnapshot
   },
   async modules(stats: Stats): Promise<ModuleState[]> {
+    if (state.mode === 'mock') return mock.makeModules(stats)
     const r = await fetchOrNull<any>('/api/protection-modules')
-    if (r) {
-      const list = r.modules || r
-      return list.map(normalizeModule)
-    }
-    if (!mockModules.length) mockModules = mock.makeModules(stats)
-    return mockModules
+    if (!r) return []
+    const list = r.modules || r
+    return list.map(normalizeModule)
   },
 
   async block(ip: string, duration_s = 0) {
@@ -405,7 +437,7 @@ export const api = {
   },
   async patchConfig(patch: Record<string, unknown>) {
     if (state.mode === 'mock') { mockConfig = { ...mockConfig, ...(patch as Partial<ConfigSnapshot>) }; return { ok: true } }
-    await raw('/api/config', { method: 'PATCH', body: JSON.stringify(patch) })
+    await mutate('/api/config', patch, 'PATCH')
     return { ok: true }
   },
   async patchModule(id: string, enabled: boolean) {
@@ -415,28 +447,30 @@ export const api = {
       if (m) m.enabled = enabled
       return { ok: true }
     }
-    await raw('/api/config', { method: 'PATCH', body: JSON.stringify(patch) })
+    await mutate('/api/config', patch, 'PATCH')
     return { ok: true }
   },
   async reloadConfig() {
     if (state.mode === 'mock') return { ok: true }
-    await raw('/api/config/reload', { method: 'POST' })
+    await mutate('/api/config/reload', {})
     return { ok: true }
   },
   async reloadGeoIp() {
     if (state.mode === 'mock') return { ok: true }
-    await raw('/api/geoip/reload', { method: 'POST' })
+    await mutate('/api/geoip/reload', {})
     return { ok: true }
   },
   async syncThreatIntel() {
     if (state.mode === 'mock') return { ok: true }
-    await raw('/api/threat-intel/sync', { method: 'POST' })
+    await mutate('/api/threat-intel/sync', {})
     return { ok: true }
   },
   async hubStatus(): Promise<any | null> {
+    if (state.mode === 'mock') return null
     return fetchOrNull<any>('/api/hub/status')
   },
   async hubNodes(): Promise<any[] | null> {
+    if (state.mode === 'mock') return null
     const r = await fetchOrNull<any>('/api/hub/proxy/nodes')
     if (!r) return null
     return r.nodes || r
@@ -444,8 +478,9 @@ export const api = {
   async ipDetail(ip: string): Promise<any | null> {
     return fetchOrNull<any>(`/api/ip-detail?ip=${encodeURIComponent(ip)}`)
   },
-  async ipSeries(ip: string): Promise<SeriesPoint[]> {
-    const r = await fetchOrNull<any>(`/api/ip-series?ip=${encodeURIComponent(ip)}&duration_s=3600`)
+  async ipSeries(ip: string, durationSeconds = 3600): Promise<SeriesPoint[]> {
+    if (state.mode === 'mock') return []
+    const r = await fetchOrNull<any>(`/api/ip-series?ip=${encodeURIComponent(ip)}&duration_s=${Math.max(60, Math.floor(durationSeconds))}`)
     if (!r) return []
     return (r.series || []).map((p: any) => {
       const drops = Number(p.drop_count ?? 0)

@@ -4,29 +4,31 @@ import PanelCard from '../components/PanelCard.vue'
 import KpiCard from '../components/KpiCard.vue'
 import { api } from '../api/client'
 import { toast } from '../stores/app'
-import { hubNodes as mockHubNodes } from '../api/mock'
 import type { ProtectionProject } from '../api/types'
 
 interface HubNode { name: string; ip: string; version: string; status: string; policies: number; last_seen: string }
 
 const projects = ref<ProtectionProject[]>([])
-const nodes = ref<HubNode[]>(mockHubNodes as HubNode[])
+const nodes = ref<HubNode[]>([])
 const hub = ref({ connected: false, url: '—' })
 const syncing = ref(false)
 
 const onlineNodes = computed(() => nodes.value.filter((n) => n.status === 'online').length)
-const ruleCount = computed(() => 18 + projects.value.length)
+const ruleCount = computed(() => projects.value.length)
 
 onMounted(async () => {
   projects.value = await api.projects()
-  const [status, remote] = await Promise.all([api.hubStatus(), api.hubNodes()])
+  const status = await api.hubStatus().catch(() => null)
+  let configured = false
   if (status && typeof status === 'object') {
     const s = status as Record<string, unknown>
+    configured = !!(s.configured ?? s.enabled)
     hub.value = {
-      connected: !!(s.connected ?? s.enabled ?? s.hub_connected),
+      connected: !!(s.connected ?? s.hub_connected),
       url: String(s.active_url || s.url || s.hub_url || '—'),
     }
   }
+  const remote = configured ? await api.hubNodes().catch(() => null) : null
   if (Array.isArray(remote) && remote.length) {
     nodes.value = remote.map((n: Record<string, unknown>) => ({
       name: String(n.node_name ?? n.name ?? '—'),
@@ -55,7 +57,7 @@ async function sync() {
   <div class="page">
     <div class="page-head">
       <div class="page-title">规则与 Hub</div>
-      <div class="page-meta">节点从 Hub 增量拉取策略包，本地写操作立即上报</div>
+      <div class="page-meta">Hub 节点与策略同步状态</div>
       <div class="page-actions">
         <button class="btn btn-primary btn-sm" :disabled="syncing" @click="sync">{{ syncing ? '同步中…' : '同步规则包' }}</button>
       </div>
@@ -70,8 +72,7 @@ async function sync() {
         :foot="hub.url"
       />
       <KpiCard label="在线节点" :value="`${onlineNodes} / ${nodes.length}`" format="raw" foot="心跳间隔 10s" />
-      <KpiCard label="规则条数" :value="ruleCount" format="int" foot="ACL + L7 + 项目" />
-      <KpiCard label="待同步" :value="0" format="int" foot="本地策略已上报" />
+      <KpiCard label="防护项目" :value="ruleCount" format="int" foot="本地项目数" />
     </div>
 
     <PanelCard title="节点列表" sub="Hub 侧的 XuanArmor 节点与策略版本" flush>
@@ -99,24 +100,5 @@ async function sync() {
       </div>
     </PanelCard>
 
-    <div class="grid grid-2">
-      <PanelCard title="规则包结构" sub="节点拉取的统一策略集">
-        <div class="dl">
-          <div class="dl-row"><span class="dl-key">端口 ACL</span><span class="dl-val">协议 + 端口 + accept/deny</span></div>
-          <div class="dl-row"><span class="dl-key">L7 指纹</span><span class="dl-val">TCP 载荷前 8 字节</span></div>
-          <div class="dl-row"><span class="dl-key">防护项目</span><span class="dl-val">{{ projects.length }} 个项目</span></div>
-          <div class="dl-row"><span class="dl-key">共享黑名单</span><span class="dl-val">Hub 下发的跨节点封禁</span></div>
-        </div>
-      </PanelCard>
-      <PanelCard title="同步策略" sub="冲突处理与回滚">
-        <dl class="kv">
-          <dt>拉取模式</dt><dd>增量 since + tombstone</dd>
-          <dt>冲突策略</dt><dd>节点本地优先，Hub 标记冲突</dd>
-          <dt>上报周期</dt><dd>30s 或写操作立即触发</dd>
-          <dt>失败重试</dt><dd>指数退避，最大 5 分钟</dd>
-          <dt>规则回滚</dt><dd>保留最近 5 个版本</dd>
-        </dl>
-      </PanelCard>
-    </div>
   </div>
 </template>

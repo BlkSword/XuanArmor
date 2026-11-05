@@ -257,6 +257,7 @@ enabled = false
 
 # 采样包日志（v0.4.2，默认关闭）
 # [packet_log]
+# 采样包日志（默认开启；内存环形缓冲，按条目数与字节数自动清理最旧数据）
 # enabled = false              # 是否启用数据面采样
 # sample_rate = 10000          # 采样率 1/N，默认 1/10000
 # memory_max_entries = 50000   # 内存中保留的最大条数

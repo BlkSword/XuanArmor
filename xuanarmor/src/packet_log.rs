@@ -105,29 +105,53 @@ fn default_limit() -> usize {
 /// 内部保存原始 `PacketSample` 以减少数据面消费时的 CPU 开销，仅在查询时转换为展示条目。
 pub struct PacketLog {
     max_entries: usize,
+    /// 采样条目占用上限（字节），超过后自动清理最旧条目。
+    max_bytes: usize,
     entries: Mutex<VecDeque<PacketSample>>,
+    bytes: std::sync::atomic::AtomicUsize,
 }
 
 impl PacketLog {
-    pub fn new(max_entries: usize) -> Self {
+    pub fn new(max_entries: usize, max_bytes: usize) -> Self {
         Self {
             max_entries,
+            max_bytes,
             entries: Mutex::new(VecDeque::with_capacity(max_entries.min(65536))),
+            bytes: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
-    /// 批量写入采样包，整个批次只加一次锁。
+    /// 批量写入采样包，整个批次只加一次锁；按条目数与字节数双上限自动清理最旧数据。
     pub fn push_many(&self, samples: &[PacketSample]) {
         if samples.is_empty() {
             return;
         }
+        let entry_size = std::mem::size_of::<PacketSample>();
         let mut entries = self.entries.lock().unwrap();
+        let mut bytes = self.bytes.load(std::sync::atomic::Ordering::Relaxed);
         for sample in samples {
             if entries.len() >= self.max_entries {
                 entries.pop_front();
+                bytes = bytes.saturating_sub(entry_size);
             }
             entries.push_back(*sample);
+            bytes += entry_size;
         }
+        while bytes > self.max_bytes && entries.len() > 1 {
+            entries.pop_front();
+            bytes = bytes.saturating_sub(entry_size);
+        }
+        self.bytes
+            .store(bytes, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 当前占用（条目数, 估算字节数），供 /api/packets 与运维排查使用。
+    pub fn usage(&self) -> (usize, usize) {
+        let entries = self.entries.lock().unwrap();
+        (
+            entries.len(),
+            self.bytes.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     pub fn query(&self, opts: &PacketLogQuery) -> Vec<PacketSampleEntry> {

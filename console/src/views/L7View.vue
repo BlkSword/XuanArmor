@@ -43,7 +43,7 @@ function remove(i: number) {
   <div class="page">
     <div class="page-head">
       <div class="page-title">L7 指纹</div>
-      <div class="page-meta">匹配 TCP 载荷前 8 字节，命中即 DROP · 最多 8 条</div>
+      <div class="page-meta">TCP 载荷前 8 字节匹配 · 最多 8 条</div>
       <div class="page-actions">
         <span class="state" :class="patterns.length >= 8 ? 'warn' : ''">
           <span class="dot" :class="patterns.length >= 8 ? 'warn' : 'ok'"></span>{{ patterns.length }} / 8
@@ -77,7 +77,7 @@ function remove(i: number) {
             </tbody>
           </table>
         </div>
-        <div class="panel-note">指纹按「载荷前 8 字节 + 掩码」匹配；数据面最多 8 条，超出部分不生效。</div>
+        <div class="panel-note">最多 8 条，超出不生效。</div>
       </PanelCard>
 
       <PanelCard title="在线探测" sub="规则变动后本地预演，不会下发数据面">

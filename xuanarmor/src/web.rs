@@ -611,7 +611,8 @@ async fn reset_token_handler(
 ) -> Response {
     let new_token = state.auth.reset_token().await;
     // 持久化到配置文件，避免服务重启后回退到旧密码。
-    if let Err(e) = crate::config::persist_api_token(&state.control.config_path, &new_token) {
+    if let Err(e) = crate::config::Config::persist_api_token(&state.control.config_path, &new_token)
+    {
         tracing::warn!("重置密码后写回配置失败: {e:#}");
     }
     state
@@ -1204,8 +1205,10 @@ async fn hub_status_handler(State(state): State<Arc<WebState>>) -> Json<serde_js
         .lock()
         .map(|g| g.clone())
         .unwrap_or_default();
+    let configured = cfg.enabled && !cfg.token.is_empty();
     Json(serde_json::json!({
         "enabled": cfg.enabled,
+        "configured": configured,
         "connected": connected,
         "active_url": active_url,
         "node_name": cfg.node_name,
@@ -1409,6 +1412,7 @@ async fn packets_handler(
         limit: q.limit.min(1000),
     };
     let offset_ns = wall_clock_offset_ns();
+    let (packet_log_entries, packet_log_bytes) = state.packet_log.usage();
     let mut entries = state.packet_log.query(&query);
     for e in &mut entries {
         e.timestamp_ns = monotonic_to_wall_ns(e.timestamp_ns, offset_ns);
@@ -1416,6 +1420,10 @@ async fn packets_handler(
     Json(serde_json::json!({
         "entries": entries,
         "count": entries.len(),
+        "usage": {
+            "entries": packet_log_entries,
+            "bytes": packet_log_bytes,
+        },
     }))
 }
 

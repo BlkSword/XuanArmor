@@ -38,7 +38,7 @@ function tone(action: string) {
   <div class="page">
     <div class="page-head">
       <div class="page-title">防护项目</div>
-      <div class="page-meta">按「目标地址 + 协议 + 端口」编排模块；PASS 低于黑名单、高于其他模块</div>
+      <div class="page-meta">按目标地址 + 协议 + 端口编排</div>
       <div class="page-actions">
         <button class="btn btn-sm" @click="openModal('新增防护项目', 'project')">新增项目</button>
         <button class="btn btn-primary btn-sm" @click="save">保存</button>
@@ -86,7 +86,7 @@ function tone(action: string) {
           </tbody>
         </table>
       </div>
-      <div class="panel-note">DEFEND 动作复用全局防御模块，并按 enabled_modules 位图过滤；未配置模块视为全开。</div>
+      <div class="panel-note">DEFEND 复用全局模块，未配置视为全开。</div>
     </PanelCard>
   </div>
 </template>

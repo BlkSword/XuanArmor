@@ -97,6 +97,7 @@ pub struct RuntimeConfigSnapshot {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RateLimitParams {
     pub enabled: bool,
     pub threshold: u64,

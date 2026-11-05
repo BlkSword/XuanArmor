@@ -7,7 +7,7 @@ import KpiCard from '../components/KpiCard.vue'
 import PanelCard from '../components/PanelCard.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
 import { api } from '../api/client'
-import { store, toast } from '../stores/app'
+import { range, rangeLabel, setRange, store, toast } from '../stores/app'
 import type { AttackEvent, ConfigSnapshot, MapUsage, MapUsageEntry, ModuleState } from '../api/types'
 import { fmtAgo, fmtCompact, fmtInt, fmtPercent, fmtRate, fmtTime } from '../utils/format'
 import { openDrawer } from '../stores/ui'
@@ -18,7 +18,6 @@ const events = ref<AttackEvent[]>([])
 const cfg = ref<ConfigSnapshot | null>(null)
 const mapUsage = ref<MapUsage | null>(null)
 const hub = ref<{ connected: boolean; url: string }>({ connected: false, url: '—' })
-const range = ref<'15m' | '1h' | '24h'>('1h')
 
 const s = computed(() => store.stats)
 const dropRate = computed(() => (s.value && s.value.current_pps ? s.value.current_dps / s.value.current_pps : 0))
@@ -202,7 +201,7 @@ function moduleStat(m: ModuleState) {
       </div>
       <div class="page-actions">
         <div class="segmented">
-          <button v-for="r in (['15m', '1h', '24h'] as const)" :key="r" :class="{ active: range === r }" @click="range = r">
+          <button v-for="r in (['15m', '1h', '24h'] as const)" :key="r" :class="{ active: range === r }" @click="setRange(r)">
             {{ r === '15m' ? '15 分钟' : r === '1h' ? '1 小时' : '24 小时' }}
           </button>
         </div>
@@ -225,7 +224,7 @@ function moduleStat(m: ModuleState) {
     </div>
 
     <div class="grid grid-main-side">
-      <PanelCard title="流量趋势" :sub="`近 ${range === '15m' ? '15 分钟' : range === '1h' ? '1 小时' : '24 小时'} · 10s 粒度`">
+      <PanelCard title="流量趋势" :sub="`近 ${rangeLabel} · 10s 粒度`">
         <template #actions>
           <div class="legend">
             <span><i style="background: var(--accent)"></i>PPS</span>

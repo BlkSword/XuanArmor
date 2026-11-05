@@ -206,7 +206,7 @@ async function unblockAllExpired() {
             </tbody>
           </table>
         </div>
-        <div class="panel-note">白名单来自配置文件与 API，优先级最高；修改后需同步到数据面。</div>
+        <div class="panel-note">白名单优先级最高。</div>
       </template>
 
       <template v-else>
@@ -231,7 +231,7 @@ async function unblockAllExpired() {
             </tbody>
           </table>
         </div>
-        <div class="panel-note">端口 ACL 在白名单之后、其他防护模块之前匹配，最多 32 条；超出部分不会生效。</div>
+        <div class="panel-note">最多 32 条，超出不生效。</div>
       </template>
     </PanelCard>
   </div>

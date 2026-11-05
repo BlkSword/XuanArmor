@@ -1,8 +1,22 @@
 import { computed, reactive, ref } from 'vue'
-import { api, getToken, setToken } from '../api/client'
+import { api, demoMode as clientDemoMode, getToken, setToken } from '../api/client'
 import type { Role, SeriesPoint, Stats } from '../api/types'
 
+export const demoMode = () => clientDemoMode()
+
 export const polls = ref(0)
+
+/** 全局时间范围：所有趋势图共用，切换后立即重新拉取对应窗口的数据。 */
+export type RangeKey = '15m' | '1h' | '24h'
+export const RANGE_SECONDS: Record<RangeKey, number> = { '15m': 900, '1h': 3600, '24h': 86400 }
+export const RANGE_LABEL: Record<RangeKey, string> = { '15m': '15 分钟', '1h': '1 小时', '24h': '24 小时' }
+export const range = ref<RangeKey>('1h')
+export const rangeSeconds = computed(() => RANGE_SECONDS[range.value])
+export const rangeLabel = computed(() => RANGE_LABEL[range.value])
+export function setRange(next: RangeKey) {
+  range.value = next
+  refresh(true)
+}
 export const live = ref(false)
 export const danger = ref(0)
 
@@ -51,7 +65,7 @@ export function toast(title: string, desc = '', kind: 'ok' | 'warn' | 'danger' |
 export async function refresh(force = false) {
   if (!store.autoRefresh && !force) return
   try {
-    const [stats, series] = await Promise.all([api.stats(), api.series()])
+    const [stats, series] = await Promise.all([api.stats(), api.series(rangeSeconds.value)])
     store.stats = stats
     store.series = series
     store.lastUpdated = Date.now()

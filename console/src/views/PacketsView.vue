@@ -32,7 +32,7 @@ onMounted(async () => {
   <div class="page">
     <div class="page-head">
       <div class="page-title">包日志</div>
-      <div class="page-meta">RingBuf 采样 <span class="mono">{{ rows.length }}</span> 条 · 采样率 1/16</div>
+      <div class="page-meta">采样包日志 · 当前 <span class="mono">{{ rows.length }}</span> 条</div>
       <div class="page-actions"><span class="state"><span class="dot warn"></span>采样</span></div>
     </div>
 

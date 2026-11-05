@@ -354,6 +354,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     let adaptive = Arc::new(adaptive::AdaptiveEngine::new(config.adaptive.clone()));
     let packet_log = Arc::new(packet_log::PacketLog::new(
         config.packet_log.memory_max_entries,
+        config.packet_log.max_bytes,
     ));
     state
         .stats
@@ -516,7 +517,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         Some(token) => Some(token),
         None => {
             let token = format!("{:032x}", rand::random::<u128>());
-            match crate::config::persist_api_token(config_path, &token) {
+            match crate::config::Config::persist_api_token(config_path, &token) {
                 Ok(()) => info!("api_token 未配置：已生成控制台密码并写入 {}", config_path),
                 Err(e) => warn!("api_token 未配置且写回配置失败（{e:#}）；本次运行使用临时密码"),
             }

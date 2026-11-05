@@ -104,7 +104,7 @@ function resetToken() {
   <div class="page">
     <div class="page-head">
       <div class="page-title">系统设置</div>
-      <div class="page-meta">开关类参数热生效；监听地址、存储路径等需重启进程</div>
+      <div class="page-meta">开关类参数热生效</div>
       <div class="page-actions">
         <button class="btn btn-primary btn-sm" :disabled="saving" @click="save">
           {{ saving ? '保存中…' : '保存运行参数' }}
