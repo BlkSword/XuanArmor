@@ -10,6 +10,13 @@ CLIENT_NS="xuanarmor-client"
 SERVER_IP="10.0.0.1"
 CLIENT_IP="10.0.0.2"
 XUANARMOR_BIN="${XUANARMOR_BIN:-./target/x86_64-unknown-linux-musl/release/xuanarmor}"
+# hping3 可能位于 /usr/sbin，netns 内 PATH 不一定包含；提前解析绝对路径
+HPING_BIN="${HPING_BIN:-$(command -v hping3 || true)}"
+if [ -z "$HPING_BIN" ] && [ -x /usr/sbin/hping3 ]; then HPING_BIN=/usr/sbin/hping3; fi
+if [ -z "$HPING_BIN" ] && [ -x /usr/bin/hping3 ]; then HPING_BIN=/usr/bin/hping3; fi
+if [ -z "$HPING_BIN" ]; then
+    echo "错误：未找到 hping3（apt-get install hping3）"; exit 1
+fi
 
 if [ "$EUID" -ne 0 ]; then
     echo "请使用 sudo 运行"
@@ -171,7 +178,7 @@ echo ""
 echo "--- 测试 2: UDP Flood (hping3 -> :53) ---"
 unblock_client
 B_UDP=$(stat udp_flood_blocked)
-timeout 3s ip netns exec "$CLIENT_NS" hping3 --flood --udp -p 53 "$SERVER_IP" >/dev/null 2>&1 || true
+timeout 3s ip netns exec "$CLIENT_NS" "$HPING_BIN" --flood --udp -p 53 "$SERVER_IP" >/dev/null 2>&1 || true
 sleep 2
 A_UDP=$(stat udp_flood_blocked)
 check "UDP Flood 触发 udp_flood_blocked" "$([ "$A_UDP" -gt "$B_UDP" ] && echo 1 || echo 0)" "+$((A_UDP - B_UDP))"
@@ -183,7 +190,7 @@ echo ""
 echo "--- 测试 3: ICMP Flood (hping3 -> icmp) ---"
 unblock_client
 B_ICMP=$(stat icmp_flood_blocked)
-timeout 3s ip netns exec "$CLIENT_NS" hping3 --flood --icmp "$SERVER_IP" >/dev/null 2>&1 || true
+timeout 3s ip netns exec "$CLIENT_NS" "$HPING_BIN" --flood --icmp "$SERVER_IP" >/dev/null 2>&1 || true
 sleep 2
 A_ICMP=$(stat icmp_flood_blocked)
 check "ICMP Flood 触发 icmp_flood_blocked" "$([ "$A_ICMP" -gt "$B_ICMP" ] && echo 1 || echo 0)" "+$((A_ICMP - B_ICMP))"
@@ -195,7 +202,7 @@ echo ""
 echo "--- 测试 4: SYN Flood (hping3 -> :80) ---"
 unblock_client
 B_SYN=$(stat syn_flood_blocked)
-timeout 3s ip netns exec "$CLIENT_NS" hping3 --flood -S -p 80 "$SERVER_IP" >/dev/null 2>&1 || true
+timeout 3s ip netns exec "$CLIENT_NS" "$HPING_BIN" --flood -S -p 80 "$SERVER_IP" >/dev/null 2>&1 || true
 sleep 2
 A_SYN=$(stat syn_flood_blocked)
 check "SYN Flood 触发 syn_flood_blocked" "$([ "$A_SYN" -gt "$B_SYN" ] && echo 1 || echo 0)" "+$((A_SYN - B_SYN))"
