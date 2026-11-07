@@ -527,13 +527,6 @@ icmp_flood_enabled = false
 tcp_reset_on_drop = false
 
 web_bind = "0.0.0.0:8720"
-
-# 包日志（v0.5.2 起默认开启，内存环形缓冲，超限自动清理最旧条目）
-[packet_log]
-enabled = true
-sample_rate = 16
-memory_max_entries = 10000
-max_bytes = 8388608
 # 未设置时进程会启动时生成随机 Token 并在日志输出前缀，外部访问仍必须携带；
 # 本机 127.0.0.1/::1 免校验（供 CLI/TUI 使用）。
 # api_token = "changeme"
@@ -551,6 +544,13 @@ alert_cooldown_s = 60
 
 whitelist = ["127.0.0.1/32", "10.0.0.0/8"]
 blacklist = []
+
+# 包日志（v0.5.2 起默认开启，内存环形缓冲，超限自动清理最旧条目）
+[packet_log]
+enabled = true
+sample_rate = 16
+memory_max_entries = 10000
+max_bytes = 8388608
 
 [xdp]
 mode = "auto"
