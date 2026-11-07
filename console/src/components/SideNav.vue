@@ -12,13 +12,6 @@ const emit = defineEmits<{ (e: 'navigate'): void }>()
 const route = useRoute()
 const active = computed(() => route.path)
 
-const xdp = computed(() => {
-  const s = store.stats as Record<string, unknown> | null
-  if (!s) return { text: '连接中', dot: 'warn' }
-  if (s.xdp_attached === false) return { text: 'XDP 未挂载', dot: 'danger' }
-  const mode = String(s.xdp_mode || 'unknown')
-  return { text: `XDP ${mode === 'native' ? 'native' : mode === 'generic' ? 'SKB' : mode}`, dot: mode === 'native' ? 'ok' : 'warn' }
-})
 const attackBadge = computed(() => {
   const dps = store.stats?.current_dps || 0
   if (!dps) return ''
@@ -53,12 +46,6 @@ const attackBadge = computed(() => {
           <span>{{ item.label }}</span>
           <span v-if="item.path === '/attacks' && attackBadge" class="nav-badge">{{ attackBadge }}</span>
         </router-link>
-      </div>
-    </div>
-    <div class="side-foot">
-      <div class="state">
-        <span class="dot" :class="xdp.dot"></span>
-        <span>{{ xdp.text }}</span>
       </div>
     </div>
   </aside>

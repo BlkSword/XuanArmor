@@ -23,6 +23,7 @@ mod time;
 mod timeseries;
 mod tui;
 mod upgrade;
+mod version_check;
 mod web;
 mod xdp_link;
 
@@ -506,6 +507,8 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     }));
 
     let notifier = notify::NotifyState::load(&config.store_path);
+    let version_check = version_check::VersionCheck::new();
+    version_check.spawn();
     let alert = AlertManager::new(AlertConfig {
         webhook_url: config.alert_webhook_url.clone(),
         webhook_type: config.alert_webhook_type.clone(),
@@ -603,6 +606,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
                 packet_log,
                 map_infos,
                 notifier,
+                version_check,
                 web_shutdown_rx,
             )
             .await

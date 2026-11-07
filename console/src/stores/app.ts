@@ -11,6 +11,21 @@ export type RangeKey = '15m' | '1h' | '24h'
 export const RANGE_SECONDS: Record<RangeKey, number> = { '15m': 900, '1h': 3600, '24h': 86400 }
 export const RANGE_LABEL: Record<RangeKey, string> = { '15m': '15 分钟', '1h': '1 小时', '24h': '24 小时' }
 export const range = ref<RangeKey>('1h')
+/** 曲线数据加载中（切换时间范围时用于显示过渡动画） */
+export const seriesLoading = ref(false)
+/** 版本检测结果：有新版本时右上角显示红点 */
+export const updateInfo = ref<{ available: boolean; latest: string; url: string }>({ available: false, latest: '', url: '' })
+export async function checkUpdate() {
+  try {
+    const r = await api.versionCheck()
+    if (!r) return
+    updateInfo.value = {
+      available: !!r.update_available,
+      latest: String(r.latest || ''),
+      url: String(r.release_url || ''),
+    }
+  } catch { /* 离线环境忽略 */ }
+}
 export const rangeSeconds = computed(() => RANGE_SECONDS[range.value])
 export const rangeLabel = computed(() => RANGE_LABEL[range.value])
 export function setRange(next: RangeKey) {
@@ -64,6 +79,7 @@ export function toast(title: string, desc = '', kind: 'ok' | 'warn' | 'danger' |
 
 export async function refresh(force = false) {
   if (!store.autoRefresh && !force) return
+  if (force) seriesLoading.value = true
   try {
     const [stats, series] = await Promise.all([api.stats(), api.series(rangeSeconds.value)])
     store.stats = stats
@@ -77,6 +93,7 @@ export async function refresh(force = false) {
     if (force) toast('刷新失败', String(e), 'danger')
   } finally {
     store.loading = false
+    seriesLoading.value = false
   }
 }
 

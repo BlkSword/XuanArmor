@@ -1,6 +1,6 @@
 [package]
 name = "xuanarmor"
-version = "0.5.2"
+version = "0.5.3"
 edition = "2021"
 license = "Apache-2.0"
 description = "eBPF/XDP host-level CC defense shield - userspace control plane"
@@ -37,6 +37,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 rand = "0.8"
 tokio-stream = { version = "0.1", features = ["sync"] }
 futures = "0.3"
+lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1", "tokio1-rustls-tls", "hostname"] }
 # 控制台 SPA 内嵌后约 1.26MB，启动时一次性 gzip 缓存，按 Accept-Encoding 协商下发
 flate2 = "1"
 

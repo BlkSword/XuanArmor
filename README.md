@@ -1,6 +1,6 @@
 # XuanArmor
 
-> 原名 eShield，自 v0.5.2 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
+> 原名 eShield，自 v0.5.3 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
 
 [English](README_EN.md) | 中文
 
@@ -320,7 +320,7 @@ min_memory_mb = 512
 refuse_memory_mb = 256
 
 [syn_proxy]
-enabled = false                  # 实验特性，默认关闭
+enabled = true                   # 默认开启
 
 [conn_track]
 enabled = false
@@ -375,7 +375,7 @@ XUANARMOR_XDP_MODE=skb sudo xuanarmor start --config /etc/xuanarmor/config.toml
 | `[limits]` | **v0.5.0**：启动内存预检（`min_memory_mb` 告警、`refuse_memory_mb` 拒绝启动）。 |
 | `[rate_limit]` | per-IP 指数衰减速率限制、触发封禁时长与 `block_mode`（hard/soft，v0.5.0）。 |
 | `[port_rate_limit]` | 按协议与目的端口的固定窗口限速，**v0.5.0 起默认开启**。 |
-| `[syn_proxy]` | IPv4 SYN Cookie 代理开关（实验特性，默认关闭）。 |
+| `[syn_proxy]` | IPv4 SYN Cookie 代理开关（默认开启，仅对超阈值源挑战）。 |
 | `udp_flood_enabled` / `icmp_flood_enabled` | 无连接 Flood 防护顶层开关。 |
 | `[l7_scan]` | TCP 首包指纹匹配（不是 WAF）。 |
 | `[adaptive]` | 重复触发规则的自动封禁窗口与阈值。 |

@@ -7,7 +7,7 @@ import KpiCard from '../components/KpiCard.vue'
 import PanelCard from '../components/PanelCard.vue'
 import ToggleSwitch from '../components/ToggleSwitch.vue'
 import { api } from '../api/client'
-import { range, rangeLabel, setRange, store, toast } from '../stores/app'
+import { range, rangeLabel, seriesLoading, setRange, store, toast } from '../stores/app'
 import type { AttackEvent, ConfigSnapshot, MapUsage, MapUsageEntry, ModuleState } from '../api/types'
 import { fmtAgo, fmtCompact, fmtInt, fmtPercent, fmtRate, fmtTime } from '../utils/format'
 import { openDrawer } from '../stores/ui'
@@ -224,7 +224,7 @@ function moduleStat(m: ModuleState) {
     </div>
 
     <div class="grid grid-main-side">
-      <PanelCard title="流量趋势" :sub="`近 ${rangeLabel} · 10s 粒度`">
+      <PanelCard title="流量趋势" :class="{ 'chart-switching': seriesLoading }" :sub="`近 ${rangeLabel} · 10s 粒度`">
         <template #actions>
           <div class="legend">
             <span><i style="background: var(--accent)"></i>PPS</span>
@@ -305,7 +305,7 @@ function moduleStat(m: ModuleState) {
             <div v-for="m in modules.slice(0, 7)" :key="m.id" class="dl-row">
               <span class="dl-key">
                 {{ m.name }}
-                <span v-if="m.id === 'syn_flood'" class="muted">· 实验</span>
+                
               </span>
               <span class="row" style="gap: 8px">
                 <span class="mono muted" style="font-size: 11px">{{ moduleStat(m) }}</span>

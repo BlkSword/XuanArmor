@@ -54,7 +54,7 @@ function compact(n: number | null) {
     <div class="kpis">
       <KpiCard label="已启用模块" :value="enabledCount" format="int" :foot="`共 ${modules.length} 个模块`" />
       <KpiCard label="速率限制拦截" :value="s?.rate_limited || 0" :foot="'累计'" />
-      <KpiCard label="SYN Flood 拦截" :value="s?.syn_flood_blocked || 0" :foot="'累计（实验特性）'" />
+      <KpiCard label="SYN Flood 拦截" :value="s?.syn_flood_blocked || 0" :foot="'累计'" />
       <KpiCard label="L7 拦截" :value="s?.l7_blocked || 0" :foot="'累计'" />
     </div>
 
@@ -73,11 +73,10 @@ function compact(n: number | null) {
           <span class="state" :class="m.enabled ? 'ok' : ''">
             <span class="dot" :class="m.enabled ? 'ok' : ''"></span>{{ m.enabled ? '运行中' : '已停用' }}
           </span>
-          <ToggleSwitch :model-value="m.enabled" @update:model-value="(v: boolean) => toggle(m, v)" />
         </div>
         <div class="mc-desc">{{ m.description }}</div>
-        <div v-if="m.fields && m.fields.length" class="module-fields">
-          <div v-for="f in m.fields" :key="f.key" class="field">
+        <div v-if="m.fields && m.fields.filter((f) => f.key !== 'enabled').length" class="module-fields">
+          <div v-for="f in m.fields.filter((f) => f.key !== 'enabled')" :key="f.key" class="field">
             <label class="field-label">{{ f.label }}</label>
             <input v-if="f.type === 'number'" class="input mono" :value="f.value as number" />
             <ToggleSwitch v-else :model-value="f.value as boolean" @update:model-value="(v: boolean) => (f.value = v)" />

@@ -20,10 +20,10 @@ log_json = false
 ebpf_log_enabled = false
 
 # 是否启用 UDP Flood 检测
-udp_flood_enabled = false
+udp_flood_enabled = true
 
 # 是否启用 ICMP/ICMPv6 Flood 检测
-icmp_flood_enabled = false
+icmp_flood_enabled = true
 
 # 丢弃 TCP 包时是否回复 RST（默认关闭）
 tcp_reset_on_drop = false
@@ -157,7 +157,7 @@ tick_ms = 100                # 固定窗口；该模块不使用 decay_num/decay
 
 # SYN Cookie 代理（实验特性，默认关闭；IPv4 TCP）
 [syn_proxy]
-enabled = false             # SYN Flood 源进入 Cookie 挑战（降级式：正常连接直通，合法客户端验证后解除）
+enabled = true             # SYN Flood 源进入 Cookie 挑战（降级式：正常连接直通，合法客户端验证后解除）
 # 挑战包仅支持 20 字节 IPv4 头 + 20/24 字节 TCP 头（单 MSS option）。
 # 带 timestamps/SACK 等选项的 SYN（常见 40 字节头）无法构造 Cookie 挑战，此类源一旦
 # 触发阈值会被直接丢弃（最长 30s，期间该源的新连接都会失败），否则这类 SYN Flood 会

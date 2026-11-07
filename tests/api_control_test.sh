@@ -272,7 +272,7 @@ else
     bad "二进制中未找到正确的 TUI 标题"
 fi
 
-log "==> 10. Token 持久化与告警通知"
+log "==> 10. Token 持久化、邮件通知与版本检测"
 # 10.1 Token 持久化：创建运行时 Token → 重启服务 → 仍可用
 CODE="$(api POST /api/tokens "$ADMIN" '{"name":"persist-test","role":"readonly","scopes":["read"]}')"
 PERSIST_TOKEN="$(jget .token)"
@@ -281,7 +281,6 @@ PERSIST_TOKEN="$(jget .token)"
 
 kill "$DAEMON_PID" 2>/dev/null || true
 sleep 1
-ip netns exec "$SRV_NS" curl -s -o /dev/null -m 1 "$BASE/ready" 2>/dev/null || true
 ip netns exec "$SRV_NS" "$BIN" start --config "$WORK/config.toml" >> "$WORK/daemon.log" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 50); do
@@ -292,41 +291,76 @@ done
 CODE="$(api GET /api/version "$PERSIST_TOKEN")"
 [ "$CODE" = "200" ] && ok "重启后运行时 Token 仍有效" || bad "重启后 Token 失效（$CODE）"
 
-# 10.2 告警通知：配置 → 测试发送 → 投递记录
-cat > "$WORK/sink.py" <<'PY'
-import http.server, sys, json
-count = 0
-class H(http.server.BaseHTTPRequestHandler):
-    def do_POST(self):
-        global count
-        length = int(self.headers.get('Content-Length') or 0)
-        body = self.rfile.read(length) if length else b''
-        count += 1
-        with open(sys.argv[2], 'a') as f:
-            f.write(json.dumps({"path": self.path, "count": count, "body": body.decode('utf-8', 'replace')[:400]}) + "\n")
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b'ok')
-    def log_message(self, *a):
-        pass
-http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()
+# 10.2 邮件通知：最小 SMTP 服务器 → 保存配置 → 测试发送 → 收件端收到
+cat > "$WORK/smtp_sink.py" <<'PY'
+import socketserver, sys, json
+
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        def send(line):
+            self.wfile.write((line + "\r\n").encode())
+            self.wfile.flush()
+        send("220 sink ESMTP")
+        data_mode = False
+        buffer = []
+        while True:
+            line = self.rfile.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", "replace").rstrip("\r\n")
+            if data_mode:
+                if text == ".":
+                    data_mode = False
+                    send("250 ok")
+                    with open(sys.argv[1], "a") as f:
+                        f.write(json.dumps({"mail": "\n".join(buffer)}) + "\n")
+                    buffer = []
+                else:
+                    buffer.append(text)
+                continue
+            upper = text.upper()
+            if upper.startswith("EHLO") or upper.startswith("HELO"):
+                send("250-sink")
+                send("250 OK")
+            elif upper.startswith("MAIL FROM") or upper.startswith("RCPT TO"):
+                send("250 OK")
+            elif upper.startswith("DATA"):
+                data_mode = True
+                send("354 End data with <CR><LF>.<CR><LF>")
+            elif upper.startswith("QUIT"):
+                send("221 bye")
+                break
+            elif upper.startswith("RSET") or upper.startswith("NOOP"):
+                send("250 OK")
+            else:
+                send("250 OK")
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+
+Server(("127.0.0.1", int(sys.argv[2])), Handler).serve_forever()
 PY
-ip netns exec "$SRV_NS" python3 "$WORK/sink.py" 18999 "$WORK/sink.out" >/dev/null 2>&1 &
-SINK_PID=$!
+ip netns exec "$SRV_NS" python3 "$WORK/smtp_sink.py" "$WORK/smtp.out" 19025 >/dev/null 2>&1 &
+SMTP_PID=$!
 sleep 0.5
-CODE="$(api PUT /api/notify "$ADMIN" '{"enabled":true,"threshold_dps":1000,"cooldown_s":60,"channels":[{"name":"test-hook","kind":"generic","url":"http://127.0.0.1:18999/hook","secret":"","enabled":true}]}')"
-[ "$CODE" = "200" ] && ok "保存通知配置" || bad "保存通知配置失败（$CODE）"
+CODE="$(api PUT /api/notify "$ADMIN" '{"enabled":true,"threshold_dps":1000,"cooldown_s":60,"email":{"enabled":true,"host":"127.0.0.1","port":19025,"username":"","password":"","from":"XuanArmor <alert@example.com>","to":["ops@example.com"],"security":"none"}}')"
+[ "$CODE" = "200" ] && ok "保存邮件通知配置" || bad "保存邮件通知配置失败（$CODE）"
 CODE="$(api GET /api/notify "$ADMIN")"
-[ "$CODE" = "200" ] && jq -e '.channels | length == 1' "$WORK/resp.json" >/dev/null 2>&1 \
-    && ok "读取通知配置" || bad "读取通知配置异常"
+[ "$CODE" = "200" ] && jq -e '.email.host == "127.0.0.1"' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "读取邮件通知配置" || bad "读取通知配置异常"
 CODE="$(api POST /api/notify/test "$ADMIN")"
-[ "$CODE" = "200" ] && jq -e '.sent == 1' "$WORK/resp.json" >/dev/null 2>&1 \
-    && ok "测试通知发送成功" || bad "测试通知发送失败（$CODE）"
+[ "$CODE" = "200" ] && jq -e '.sent == 1 and (.results[0].ok == true)' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "测试邮件发送成功" || bad "测试邮件发送失败（$CODE）"
 CODE="$(api GET /api/notify/deliveries "$ADMIN")"
 jq -e '.deliveries | length >= 1 and (.[0].ok == true)' "$WORK/resp.json" >/dev/null 2>&1 \
     && ok "投递记录可查询且成功" || bad "投递记录异常"
-[ -s "$WORK/sink.out" ] && ok "接收端实际收到通知" || bad "接收端未收到通知"
-kill "$SINK_PID" 2>/dev/null || true
+[ -s "$WORK/smtp.out" ] && ok "SMTP 接收端实际收到邮件" || bad "SMTP 接收端未收到邮件"
+kill "$SMTP_PID" 2>/dev/null || true
+
+# 10.3 版本检测接口
+CODE="$(api GET /api/version/check "$ADMIN")"
+[ "$CODE" = "200" ] && jq -e '.current | type == "string"' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "版本检测接口可用" || bad "版本检测接口异常（$CODE）"
 
 log
 log "================ API 测试结果 ================"

@@ -159,8 +159,10 @@ pub struct WebState {
     pub login_limiter: Arc<LoginLimiter>,
     pub packet_log: Arc<PacketLog>,
     pub map_infos: Arc<Vec<MapInfo>>,
-    /// 多通道告警通知（配置保存在 notify.json，可运行时修改）
+    /// 告警通知（SMTP 邮件，配置保存在 notify.json，可运行时修改）
     pub notify: Arc<crate::notify::NotifyState>,
+    /// 版本检测（GitHub Release 周期查询）
+    pub version_check: Arc<crate::version_check::VersionCheck>,
     /// 服务启动时刻（用于 `/api/version` 的 uptime_s）
     pub started_at: std::time::Instant,
     /// 服务启动的 Unix 时间戳（秒）
@@ -179,6 +181,7 @@ pub async fn run(
     packet_log: Arc<PacketLog>,
     map_infos: Arc<Vec<MapInfo>>,
     notify: Arc<crate::notify::NotifyState>,
+    version_check: Arc<crate::version_check::VersionCheck>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(WebState {
@@ -190,6 +193,7 @@ pub async fn run(
         packet_log,
         map_infos,
         notify,
+        version_check,
         started_at: std::time::Instant::now(),
         started_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -655,9 +659,9 @@ async fn protection_modules_handler(State(state): State<Arc<WebState>>) -> Json<
     let modules = vec![
         serde_json::json!({
             "id": "syn_flood",
-            "name": "SYN Flood 防护（实验特性）",
+            "name": "SYN Flood 防护",
             "category": "DDoS",
-            "description": "基于 SYN 代理 / Cookie 抵御 SYN Flood（实验特性，默认关闭）：\
+            "description": "基于 SYN 代理 / Cookie 抵御 SYN Flood（默认开启）：\
         仅支持 IPv4；Cookie 校验位 30 位；被挑战源在 30s 内合法连接也会失败，\
         面向真实客户端的高流量服务建议用 SYN Flood 检测 + 限速替代。",
             "enabled": rt.syn_proxy_enabled,

@@ -26,7 +26,7 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
 | Per-IP 速率限制 | 指数衰减窗口，超阈值封禁或丢弃（`[rate_limit].block_mode`）。 |
 | 按协议 + 目的端口聚合限速 | 不依赖源地址，防伪造源 IP 绕过；**v0.5.0 起默认开启**。 |
 | UDP / ICMP Flood 防护 | 无连接流量的 per-IP 与 per-port 速率抑制。 |
-| SYN Flood 检测 | 单源 SYN 速率检测；可选 SYN Cookie 挑战（实验特性，默认关闭）。 |
+| SYN Flood 检测 | 单源 SYN 速率检测；SYN Cookie 挑战默认开启（默认仅对超阈值源生效）。 |
 | 端口/协议 ACL | `tcp`/`udp`/`icmp`/`icmpv6`/`any` + 端口/端口范围。 |
 | GeoIP / ASN 过滤 | 按国家/ASN 的 CIDR 名单放行或封禁。 |
 | 威胁情报 | 外部 feed 定时入库到黑名单。 |
@@ -114,7 +114,7 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
   只能用 generic 或改用直通网卡。
 - **现状**：不支持（驱动能力限制）；容量规划请按 generic 的实测成本留余量。
 
-### B7. SYN Cookie 代理是实验特性（默认关闭）
+### B7. SYN Cookie 代理的已知限制
 
 - **现象**：开启 `[syn_proxy].enabled = true` 后，部分真实客户端的连接在 30s 内失败；
   带 IP option 或带载荷的 SYN 被直接丢弃。
@@ -123,7 +123,7 @@ XuanArmor 是**主机级 L3-L4 清洗盾**：eBPF/XDP 程序挂载在单台 Linu
   带 IP option / 数据的 SYN 无法构造挑战包，只能丢弃。
 - **缓解**：面向真实客户端的高流量服务**不要**开启该模块，改用 SYN Flood 检测 + 速率限制；
   只在"攻击几乎完全由 SYN 构成且客户端可重试"的场景短时开启。
-- **现状**：实验特性，默认关闭；不建议用于面向真实客户端的高流量服务。
+- **现状**：默认开启；仅对超过 SYN Flood 阈值的源发起挑战，正常连接直通。
 
 ### B8. L7 扫描只检查 TCP 首包 8 字节
 

@@ -696,3 +696,16 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--accent);
   .search { display: none; }
   .grid-2 { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* 时间范围切换时曲线过渡：轻微淡出 + 上浮，配合骨架屏式占位 */
+.chart-switching .line-chart,
+.chart-switching canvas,
+.chart-switching svg {
+  opacity: 0.35;
+  transform: translateY(3px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.line-chart,
+.line-chart svg {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}

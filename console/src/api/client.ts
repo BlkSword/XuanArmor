@@ -475,6 +475,10 @@ export const api = {
     if (!r) return null
     return r.nodes || r
   },
+  async versionCheck(): Promise<any | null> {
+    if (state.mode === 'mock') return null
+    return fetchOrNull<any>('/api/version/check')
+  },
   async ipDetail(ip: string): Promise<any | null> {
     return fetchOrNull<any>(`/api/ip-detail?ip=${encodeURIComponent(ip)}`)
   },
@@ -502,13 +506,15 @@ export const api = {
     if (state.mode === 'mock') {
       return {
         enabled: true, threshold_dps: 1000, cooldown_s: 60,
-        channels: [
-          { name: 'ops-webhook', kind: 'generic', url: 'https://example.com/hook', has_secret: false, enabled: true },
-        ],
+        email: {
+          enabled: true, host: 'smtp.example.com', port: 587, username: 'alert@example.com',
+          has_password: true, from: 'XuanArmor <alert@example.com>',
+          to: ['oncall@example.com'], security: 'starttls',
+        },
       }
     }
     const r = await fetchOrNull<any>('/api/notify')
-    return r ?? { enabled: false, threshold_dps: 1000, cooldown_s: 60, channels: [] }
+    return r ?? { enabled: false, threshold_dps: 1000, cooldown_s: 60, email: { enabled: false, host: '', port: 587, username: '', has_password: false, from: '', to: [], security: 'starttls' } }
   },
   async saveNotify(config: Record<string, unknown>): Promise<any> {
     return raw<any>('/api/notify', { method: 'PUT', body: JSON.stringify(config) })

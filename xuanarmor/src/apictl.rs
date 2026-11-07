@@ -45,6 +45,7 @@ pub type IdemEntry = (Instant, u16, Value);
 pub fn router() -> Router<Arc<WebState>> {
     Router::new()
         .route("/api/version", get(version_handler))
+        .route("/api/version/check", get(version_check_handler))
         .route("/api/openapi.json", get(openapi_handler))
         .route("/api/config/validate", post(config_validate_handler))
         .route("/api/policy", get(policy_get_handler))
@@ -745,4 +746,16 @@ async fn notify_deliveries_handler(
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let items = state.notify.deliveries(limit).await;
     Json(json!({"deliveries": items, "count": items.len()}))
+}
+
+async fn version_check_handler(State(state): State<Arc<WebState>>) -> Json<Value> {
+    let snap = state.version_check.snapshot().await;
+    Json(json!({
+        "current": snap.current,
+        "latest": snap.latest,
+        "update_available": snap.update_available,
+        "checked_at": snap.checked_at,
+        "release_url": snap.release_url,
+        "error": snap.error,
+    }))
 }

@@ -74,7 +74,7 @@ gen_console_token() {
 
 REPO="${XUANARMOR_REPO:-${ESHIELD_REPO:-BlkSword/XuanArmor}}"
 # 优先从环境变量读取版本；未设置时依次尝试 workspace / xuanarmor crate 的 Cargo.toml；最后回退到默认版本。
-DEFAULT_VERSION="0.5.2"
+DEFAULT_VERSION="0.5.3"
 if [ -z "${VERSION:-}" ]; then
     if [ -f "Cargo.toml" ] && grep -qE '^\[workspace\]' Cargo.toml 2>/dev/null; then
         # workspace 根 Cargo.toml 不含 version，版本在 xuanarmor/Cargo.toml
@@ -522,8 +522,8 @@ log_level = "info"
 log_json = false
 ebpf_log_enabled = false
 
-udp_flood_enabled = false
-icmp_flood_enabled = false
+udp_flood_enabled = true
+icmp_flood_enabled = true
 tcp_reset_on_drop = false
 
 web_bind = "0.0.0.0:8720"
@@ -583,7 +583,7 @@ min_memory_mb = 512
 refuse_memory_mb = 256
 
 [syn_proxy]
-enabled = false
+enabled = true
 
 [l7_scan]
 enabled = false

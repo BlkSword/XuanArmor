@@ -6,7 +6,7 @@ import SlideDrawer from './components/SlideDrawer.vue'
 import ModalDialog from './components/ModalDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ToastHost from './components/ToastHost.vue'
-import { commandOpen, initTheme, refresh, setRole, store } from './stores/app'
+import { checkUpdate, commandOpen, initTheme, refresh, setRole, store } from './stores/app'
 import { api } from './api/client'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -52,6 +52,8 @@ async function bootstrapAuth() {
 }
 
 onMounted(() => {
+  checkUpdate()
+  window.setInterval(checkUpdate, 30 * 60 * 1000)
   initTheme()
   bootstrapAuth()
   timer = window.setInterval(() => refresh(), 3000)

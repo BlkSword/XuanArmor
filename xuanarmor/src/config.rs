@@ -59,9 +59,9 @@ pub struct Config {
     pub log_level: String,
     #[serde(default = "default_false")]
     pub ebpf_log_enabled: bool,
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub udp_flood_enabled: bool,
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub icmp_flood_enabled: bool,
     #[serde(default = "default_false")]
     pub tcp_reset_on_drop: bool,
@@ -596,7 +596,7 @@ fn default_adaptive_block_duration_s() -> u64 {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SynProxyConfig {
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
 }
 

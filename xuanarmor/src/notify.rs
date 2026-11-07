@@ -1,7 +1,8 @@
-//! 告警通知（多通道）：webhook / 钉钉 / 企业微信 / 飞书 / Slack。
+//! 告警通知（SMTP 邮件）。
 //!
-//! 配置独立保存在 `<数据目录>/notify.json`（0600），可通过 API 读取/修改/测试发送，
-//! 触发来源包括：DPS 阈值告警、手工测试。发送结果保留最近 200 条供控制台查看。
+//! 配置保存在 `<数据目录>/notify.json`（0600），支持运行时修改与测试发送；
+//! 触发来源：DROP 速率超过阈值（按冷却时间限频）、手工测试。
+//! 发送记录保留最近 200 条。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -12,45 +13,63 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock};
 
-const MAX_DELIVERIES: usize = 200;
-const HUB_TIMEOUT_S: u64 = 10;
+use lettre::message::Mailbox;
+use lettre::transport::smtp::authentication::Credentials;
+use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ChannelKind {
-    Generic,
-    Dingtalk,
-    Wecom,
-    Feishu,
-    Slack,
+const MAX_DELIVERIES: usize = 200;
+const SEND_TIMEOUT_S: u64 = 15;
+
+fn default_smtp_port() -> u16 {
+    587
+}
+fn default_tls_mode() -> String {
+    "starttls".to_string()
+}
+fn default_threshold() -> u64 {
+    1000
+}
+fn default_cooldown() -> u64 {
+    60
 }
 
-impl ChannelKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ChannelKind::Generic => "generic",
-            ChannelKind::Dingtalk => "dingtalk",
-            ChannelKind::Wecom => "wecom",
-            ChannelKind::Feishu => "feishu",
-            ChannelKind::Slack => "slack",
+/// SMTP 邮件通知配置。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmailConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default = "default_smtp_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    /// 发件人，例如 `XuanArmor <alert@example.com>`
+    #[serde(default)]
+    pub from: String,
+    /// 收件人列表
+    #[serde(default)]
+    pub to: Vec<String>,
+    /// `tls`（465 隐式 TLS）| `starttls`（587）| `none`（明文，仅内网测试）
+    #[serde(default = "default_tls_mode")]
+    pub security: String,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: String::new(),
+            port: default_smtp_port(),
+            username: String::new(),
+            password: String::new(),
+            from: String::new(),
+            to: Vec::new(),
+            security: default_tls_mode(),
         }
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NotifyChannel {
-    pub name: String,
-    pub kind: ChannelKind,
-    pub url: String,
-    /// 可选签名/密钥（不同平台用途不同，原样保存）
-    #[serde(default)]
-    pub secret: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -63,14 +82,7 @@ pub struct NotifyConfig {
     #[serde(default = "default_cooldown")]
     pub cooldown_s: u64,
     #[serde(default)]
-    pub channels: Vec<NotifyChannel>,
-}
-
-fn default_threshold() -> u64 {
-    1000
-}
-fn default_cooldown() -> u64 {
-    60
+    pub email: EmailConfig,
 }
 
 impl Default for NotifyConfig {
@@ -79,7 +91,7 @@ impl Default for NotifyConfig {
             enabled: false,
             threshold_dps: default_threshold(),
             cooldown_s: default_cooldown(),
-            channels: Vec::new(),
+            email: EmailConfig::default(),
         }
     }
 }
@@ -100,7 +112,6 @@ pub struct NotifyState {
     path: PathBuf,
     config: RwLock<NotifyConfig>,
     deliveries: Mutex<VecDeque<Delivery>>,
-    client: reqwest::Client,
     last_alert_s: AtomicU64,
 }
 
@@ -123,49 +134,48 @@ impl NotifyState {
             path,
             config: RwLock::new(config),
             deliveries: Mutex::new(VecDeque::new()),
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(HUB_TIMEOUT_S))
-                .build()
-                .unwrap_or_default(),
             last_alert_s: AtomicU64::new(0),
         })
     }
 
-    /// 读取配置（密钥以布尔形式返回，不回传明文）。
+    /// 读取配置（密码以布尔形式返回，不回传明文）。
     pub async fn public_config(&self) -> Value {
         let cfg = self.config.read().await;
         json!({
             "enabled": cfg.enabled,
             "threshold_dps": cfg.threshold_dps,
             "cooldown_s": cfg.cooldown_s,
-            "channels": cfg.channels.iter().map(|c| json!({
-                "name": c.name,
-                "kind": c.kind.as_str(),
-                "url": c.url,
-                "has_secret": !c.secret.is_empty(),
-                "enabled": c.enabled,
-            })).collect::<Vec<_>>(),
+            "email": {
+                "enabled": cfg.email.enabled,
+                "host": cfg.email.host,
+                "port": cfg.email.port,
+                "username": cfg.email.username,
+                "has_password": !cfg.email.password.is_empty(),
+                "from": cfg.email.from,
+                "to": cfg.email.to,
+                "security": cfg.email.security,
+            },
         })
     }
 
-    /// 保存配置：空 secret 表示保留原密钥（同名同 kind）。
+    /// 保存配置：空密码表示保留原密码。
     pub async fn update(&self, mut incoming: NotifyConfig) -> anyhow::Result<Value> {
         if incoming.threshold_dps > 0 && incoming.threshold_dps < 10 {
             anyhow::bail!("threshold_dps 过小（应 >= 10 或 0 表示不启用阈值告警）");
         }
-        {
-            let old = self.config.read().await;
-            for ch in incoming.channels.iter_mut() {
-                if ch.secret.is_empty() {
-                    if let Some(prev) = old
-                        .channels
-                        .iter()
-                        .find(|p| p.name == ch.name && p.kind.as_str() == ch.kind.as_str())
-                    {
-                        ch.secret = prev.secret.clone();
-                    }
-                }
+        if incoming.email.enabled {
+            if incoming.email.host.trim().is_empty() {
+                anyhow::bail!("SMTP 服务器地址不能为空");
             }
+            if incoming.email.from.trim().is_empty() {
+                anyhow::bail!("发件人不能为空");
+            }
+            if incoming.email.to.is_empty() {
+                anyhow::bail!("至少配置一个收件人");
+            }
+        }
+        if incoming.email.password.is_empty() {
+            incoming.email.password = self.config.read().await.email.password.clone();
         }
         let bytes = serde_json::to_vec_pretty(&incoming)?;
         let mut options = std::fs::OpenOptions::new();
@@ -195,29 +205,25 @@ impl NotifyState {
         guard.push_back(delivery);
     }
 
-    /// 发送测试消息到所有已启用通道，返回每个通道结果。
+    /// 发送测试邮件。
     pub async fn send_test(&self) -> Value {
         let cfg = self.config.read().await.clone();
+        if !cfg.email.enabled {
+            return json!({"sent": 0, "results": [], "error": "邮件通知未启用"});
+        }
         let payload = json!({
             "event": "test",
-            "title": "XuanArmor 测试通知",
-            "message": "这是一条测试通知。如收到说明通知通道配置正确。",
+            "message": "这是一条测试邮件。如收到说明 SMTP 配置正确。",
             "timestamp": now_secs(),
         });
-        let mut results = Vec::new();
-        for channel in cfg.channels.iter().filter(|c| c.enabled) {
-            results.push(self.send_to(channel, "test", &payload).await);
-        }
-        json!({
-            "sent": results.len(),
-            "results": results,
-        })
+        let result = self.send_email(&cfg.email, "test", &payload).await;
+        json!({"sent": 1, "results": [result]})
     }
 
-    /// 阈值告警：按 cooldown 限制触发频率后群发。
+    /// 阈值告警：按冷却时间限制频率后发送邮件。
     pub async fn send_attack_alert(&self, payload: Value) {
         let cfg = self.config.read().await.clone();
-        if !cfg.enabled {
+        if !cfg.enabled || !cfg.email.enabled {
             return;
         }
         let now = now_secs();
@@ -226,46 +232,27 @@ impl NotifyState {
             return;
         }
         self.last_alert_s.store(now, Ordering::Relaxed);
-        for channel in cfg.channels.iter().filter(|c| c.enabled) {
-            self.send_to(channel, "attack_threshold", &payload).await;
-        }
+        self.send_email(&cfg.email, "attack_threshold", &payload)
+            .await;
     }
 
-    async fn send_to(&self, channel: &NotifyChannel, event: &str, payload: &Value) -> Value {
-        let text = render_text(event, payload);
-        let body = match channel.kind {
-            ChannelKind::Generic => payload.clone(),
-            ChannelKind::Dingtalk => json!({"msgtype": "text", "text": {"content": text}}),
-            ChannelKind::Wecom => json!({"msgtype": "text", "text": {"content": text}}),
-            ChannelKind::Feishu => json!({"msg_type": "text", "content": {"text": text}}),
-            ChannelKind::Slack => json!({"text": text}),
-        };
+    async fn send_email(&self, email: &EmailConfig, event: &str, payload: &Value) -> Value {
         let started = Instant::now();
-        let mut request = self.client.post(&channel.url).json(&body);
-        if !channel.secret.is_empty() && channel.kind == ChannelKind::Slack {
-            request = request.header("Authorization", format!("Bearer {}", channel.secret));
-        }
-        let (ok, status, error) = match request.send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if resp.status().is_success() {
-                    (true, Some(status), None)
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    (
-                        false,
-                        Some(status),
-                        Some(body.chars().take(200).collect::<String>()),
-                    )
-                }
-            }
+        let (ok, status, error) = match build_transport(email) {
+            Ok(transport) => match build_message(email, event, payload) {
+                Ok(message) => match transport.send(message).await {
+                    Ok(resp) => (true, resp.code().to_string().parse::<u16>().ok(), None),
+                    Err(e) => (false, None, Some(e.to_string())),
+                },
+                Err(e) => (false, None, Some(e.to_string())),
+            },
             Err(e) => (false, None, Some(e.to_string())),
         };
         let delivery = Delivery {
             timestamp: now_secs(),
             event: event.to_string(),
-            channel: channel.name.clone(),
-            kind: channel.kind.as_str().to_string(),
+            channel: "email".to_string(),
+            kind: "smtp".to_string(),
             ok,
             status,
             error,
@@ -277,16 +264,74 @@ impl NotifyState {
     }
 }
 
+fn build_transport(email: &EmailConfig) -> anyhow::Result<AsyncSmtpTransport<Tokio1Executor>> {
+    let mode = email.security.to_ascii_lowercase();
+    let builder = match mode.as_str() {
+        "tls" | "ssl" => AsyncSmtpTransport::<Tokio1Executor>::relay(&email.host)?.port(email.port),
+        "none" | "plain" => {
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&email.host).port(email.port)
+        }
+        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&email.host)?.port(email.port),
+    };
+    let builder = if email.username.is_empty() {
+        builder
+    } else {
+        builder.credentials(Credentials::new(
+            email.username.clone(),
+            email.password.clone(),
+        ))
+    };
+    Ok(builder
+        .timeout(Some(Duration::from_secs(SEND_TIMEOUT_S)))
+        .build())
+}
+
+fn build_message(model: &EmailConfig, event: &str, payload: &Value) -> anyhow::Result<Message> {
+    let from: Mailbox = model
+        .from
+        .parse()
+        .map_err(|e| anyhow::anyhow!("发件人格式错误: {e}"))?;
+    let mut builder = Message::builder()
+        .from(from)
+        .subject(format!("[XuanArmor] {}", subject_for(event)))
+        .header(lettre::message::header::ContentType::TEXT_PLAIN);
+    for addr in &model.to {
+        let mailbox: Mailbox = addr
+            .parse()
+            .map_err(|e| anyhow::anyhow!("收件人格式错误 {addr}: {e}"))?;
+        builder = builder.to(mailbox);
+    }
+    Ok(builder.body(render_body(event, payload))?)
+}
+
+fn subject_for(event: &str) -> &'static str {
+    match event {
+        "attack_threshold" => "攻击流量告警",
+        "test" => "测试通知",
+        _ => "通知",
+    }
+}
+
+fn render_body(event: &str, payload: &Value) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("事件: {event}"));
+    if let Some(message) = payload.get("message").and_then(|v| v.as_str()) {
+        lines.push(format!("描述: {message}"));
+    }
+    for (key, value) in payload.as_object().into_iter().flatten() {
+        if key == "message" || key == "event" {
+            continue;
+        }
+        lines.push(format!("{key}: {value}"));
+    }
+    lines.push(String::new());
+    lines.push("由 XuanArmor 自动发送。".to_string());
+    lines.join("\n")
+}
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
-}
-
-fn render_text(event: &str, payload: &Value) -> String {
-    if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
-        return format!("[XuanArmor] {event}: {msg}");
-    }
-    format!("[XuanArmor] {event}: {payload}")
 }

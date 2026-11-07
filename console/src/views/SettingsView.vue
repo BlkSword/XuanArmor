@@ -23,10 +23,21 @@ const tokenScopes = ref('read,write,policy,events')
 const createdToken = ref('')
 const tokenBusy = ref(false)
 
-// ── 告警通知（多通道） ──
-interface NotifyChannel { name: string; kind: string; url: string; secret?: string; has_secret?: boolean; enabled: boolean }
-const notify = ref<{ enabled: boolean; threshold_dps: number; cooldown_s: number; channels: NotifyChannel[] }>({
-  enabled: false, threshold_dps: 1000, cooldown_s: 60, channels: [],
+// ── 告警通知（SMTP 邮件） ──
+interface NotifyEmail {
+  enabled: boolean
+  host: string
+  port: number
+  username: string
+  password: string
+  has_password: boolean
+  from: string
+  to: string
+  security: string
+}
+const notify = ref<{ enabled: boolean; threshold_dps: number; cooldown_s: number; email: NotifyEmail }>({
+  enabled: false, threshold_dps: 1000, cooldown_s: 60,
+  email: { enabled: false, host: '', port: 587, username: '', password: '', has_password: false, from: '', to: '', security: 'starttls' },
 })
 const deliveries = ref<Array<Record<string, unknown>>>([])
 const notifyBusy = ref(false)
@@ -120,20 +131,25 @@ async function revokeToken(name: string) {
 async function loadNotify() {
   try {
     const r = await api.notifyConfig()
+    const email = r.email || {}
     notify.value = {
       enabled: !!r.enabled,
       threshold_dps: Number(r.threshold_dps ?? 1000),
       cooldown_s: Number(r.cooldown_s ?? 60),
-      channels: Array.isArray(r.channels) ? r.channels : [],
+      email: {
+        enabled: !!email.enabled,
+        host: String(email.host ?? ''),
+        port: Number(email.port ?? 587),
+        username: String(email.username ?? ''),
+        password: '',
+        has_password: !!email.has_password,
+        from: String(email.from ?? ''),
+        to: Array.isArray(email.to) ? email.to.join(', ') : String(email.to ?? ''),
+        security: String(email.security ?? 'starttls'),
+      },
     }
     deliveries.value = await api.notifyDeliveries(10)
   } catch { /* ignore */ }
-}
-function addChannel() {
-  notify.value.channels.push({ name: `channel-${notify.value.channels.length + 1}`, kind: 'generic', url: '', secret: '', enabled: true })
-}
-function removeChannel(idx: number) {
-  notify.value.channels.splice(idx, 1)
 }
 async function saveNotify() {
   notifyBusy.value = true
@@ -142,13 +158,16 @@ async function saveNotify() {
       enabled: notify.value.enabled,
       threshold_dps: Number(notify.value.threshold_dps) || 0,
       cooldown_s: Number(notify.value.cooldown_s) || 0,
-      channels: notify.value.channels.map((c) => ({
-        name: c.name,
-        kind: c.kind,
-        url: c.url,
-        secret: c.secret || '',
-        enabled: !!c.enabled,
-      })),
+      email: {
+        enabled: notify.value.email.enabled,
+        host: notify.value.email.host,
+        port: Number(notify.value.email.port) || 587,
+        username: notify.value.email.username,
+        password: notify.value.email.password,
+        from: notify.value.email.from,
+        to: notify.value.email.to.split(',').map((x) => x.trim()).filter(Boolean),
+        security: notify.value.email.security,
+      },
     })
     toast('通知配置已保存', '', 'ok')
     await loadNotify()
@@ -234,7 +253,7 @@ function resetToken() {
           <ToggleSwitch v-if="cfg" v-model="cfg.rate_limit_enabled" />
         </div>
         <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">SYN Proxy / Cookie</div><div class="sr-desc">IPv4 SYN Flood 缓解（实验特性，默认关闭）</div></div>
+          <div class="sr-main"><div class="sr-title">SYN Proxy / Cookie</div><div class="sr-desc">IPv4 SYN Flood 缓解（默认开启）</div></div>
           <ToggleSwitch v-if="cfg" v-model="cfg.syn_proxy_enabled" />
         </div>
         <div class="setting-row">
@@ -365,7 +384,7 @@ function resetToken() {
     </PanelCard>
 
     <div class="grid grid-2">
-      <PanelCard title="告警通知" sub="DROP 速率超过阈值时推送到已启用通道">
+      <PanelCard title="告警通知" sub="DROP 速率超过阈值时发送邮件">
         <div class="spread" style="margin-bottom: 8px">
           <div class="field" style="min-width: 160px">
             <label class="field-label">启用阈值告警</label>
@@ -374,34 +393,31 @@ function resetToken() {
           <div class="field" style="width: 160px"><label class="field-label">阈值（DROP/s）</label><input v-model.number="notify.threshold_dps" class="input mono" type="number" /></div>
           <div class="field" style="width: 140px"><label class="field-label">冷却（s）</label><input v-model.number="notify.cooldown_s" class="input mono" type="number" /></div>
         </div>
-        <div class="table-wrap">
-          <table class="dt">
-            <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>密钥</th><th>启用</th><th class="col-actions">操作</th></tr></thead>
-            <tbody>
-              <tr v-for="(c, i) in notify.channels" :key="i">
-                <td><input v-model="c.name" class="input mono" style="width: 110px" /></td>
-                <td>
-                  <select v-model="c.kind" class="input">
-                    <option value="generic">通用 Webhook</option>
-                    <option value="dingtalk">钉钉</option>
-                    <option value="wecom">企业微信</option>
-                    <option value="feishu">飞书</option>
-                    <option value="slack">Slack</option>
-                  </select>
-                </td>
-                <td><input v-model="c.url" class="input mono" style="width: 100%" placeholder="https://..." /></td>
-                <td><input v-model="c.secret" class="input mono" style="width: 90px" :placeholder="c.has_secret ? '已保存' : '可选'" /></td>
-                <td><ToggleSwitch :model-value="c.enabled" @update:model-value="(v: boolean) => (c.enabled = v)" /></td>
-                <td class="col-actions"><div class="row-actions"><button class="btn btn-sm" @click="removeChannel(i)">删除</button></div></td>
-              </tr>
-              <tr v-if="!notify.channels.length"><td colspan="6" class="empty"><div class="title">未配置通知通道</div>点击「添加通道」配置 Webhook / 钉钉 / 企业微信 / 飞书 / Slack</td></tr>
-            </tbody>
-          </table>
+        <div class="spread" style="margin-bottom: 8px">
+          <div class="field" style="min-width: 160px">
+            <label class="field-label">启用邮件通知</label>
+            <ToggleSwitch :model-value="notify.email.enabled" @update:model-value="(v: boolean) => (notify.email.enabled = v)" />
+          </div>
+          <div class="field" style="width: 140px"><label class="field-label">传输安全</label>
+            <select v-model="notify.email.security" class="input">
+              <option value="starttls">STARTTLS（587）</option>
+              <option value="tls">SSL/TLS（465）</option>
+              <option value="none">明文（仅内网测试）</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-3">
+          <div class="field"><label class="field-label">SMTP 服务器</label><input v-model="notify.email.host" class="input mono" placeholder="smtp.example.com" /></div>
+          <div class="field"><label class="field-label">端口</label><input v-model.number="notify.email.port" class="input mono" type="number" /></div>
+          <div class="field"><label class="field-label">用户名</label><input v-model="notify.email.username" class="input mono" /></div>
+          <div class="field"><label class="field-label">密码/授权码</label><input v-model="notify.email.password" class="input mono" type="password" :placeholder="notify.email.has_password ? '已保存（留空表示不修改）' : ''" /></div>
+          <div class="field"><label class="field-label">发件人</label><input v-model="notify.email.from" class="input mono" placeholder="XuanArmor &lt;alert@example.com&gt;" /></div>
+          <div class="field"><label class="field-label">收件人（逗号分隔）</label><input v-model="notify.email.to" class="input mono" placeholder="ops@example.com, oncall@example.com" /></div>
         </div>
         <div class="spread" style="margin-top: 8px">
-          <button class="btn btn-sm" @click="addChannel">添加通道</button>
+          <span class="muted" style="font-size: 11px">阈值告警按冷却时间限频发送到上述收件人。</span>
           <div class="row-actions">
-            <button class="btn btn-sm" :disabled="testing" @click="testNotify">{{ testing ? '发送中…' : '发送测试' }}</button>
+            <button class="btn btn-sm" :disabled="testing" @click="testNotify">{{ testing ? '发送中…' : '发送测试邮件' }}</button>
             <button class="btn btn-primary btn-sm" :disabled="notifyBusy" @click="saveNotify">{{ notifyBusy ? '保存中…' : '保存通知配置' }}</button>
           </div>
         </div>
@@ -409,13 +425,12 @@ function resetToken() {
           <div class="muted" style="font-size: 11px; margin-bottom: 4px">最近投递</div>
           <div class="table-wrap">
             <table class="dt">
-              <thead><tr><th>时间</th><th>事件</th><th>通道</th><th>结果</th><th class="col-num">耗时</th></tr></thead>
+              <thead><tr><th>时间</th><th>事件</th><th>结果</th><th class="col-num">耗时</th></tr></thead>
               <tbody>
                 <tr v-for="(d, i) in deliveries" :key="i">
                   <td class="mono muted">{{ d.timestamp }}</td>
                   <td>{{ d.event }}</td>
-                  <td>{{ d.channel }}（{{ d.kind }}）</td>
-                  <td><span class="state" :class="d.ok ? 'ok' : 'danger'"><span class="dot" :class="d.ok ? 'ok' : 'danger'"></span>{{ d.ok ? '成功' : (d.error || d.status || '失败') }}</span></td>
+                  <td><span class="state" :class="d.ok ? 'ok' : 'danger'"><span class="dot" :class="d.ok ? 'ok' : 'danger'"></span>{{ d.ok ? '成功' : (d.error || '失败') }}</span></td>
                   <td class="col-num mono">{{ d.latency_ms }}ms</td>
                 </tr>
               </tbody>
