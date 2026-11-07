@@ -32,6 +32,7 @@ cleanup() {
     ip netns del "$CLIENT_NS" 2>/dev/null || true
     rm -f /tmp/xuanarmor-attack-test.toml /tmp/xuanarmor-attack-test.redb
 }
+    rm -f /run/xuanarmor-bpf/xuanarmor_xdp_link /sys/fs/bpf/xuanarmor_xdp_link 2>/dev/null || true
 trap cleanup EXIT
 
 echo "=== XuanArmor 完整攻防测试 ==="
@@ -178,9 +179,13 @@ echo ""
 echo "--- 测试 2: UDP Flood (hping3 -> :53) ---"
 unblock_client
 B_UDP=$(stat udp_flood_blocked)
-timeout 3s ip netns exec "$CLIENT_NS" "$HPING_BIN" --flood --udp -p 53 "$SERVER_IP" >/dev/null 2>&1 || true
+echo "DEBUG before: udp_flood_blocked=$B_UDP udp_dropped=$(stat udp_dropped) port_rate=$(stat port_rate_blocked) total_dropped=$(stat total_dropped)"
+timeout 3s ip netns exec "$CLIENT_NS" "$HPING_BIN" --flood --udp -p 53 "$SERVER_IP" >/tmp/hp.out 2>&1 || HP_RC=$?
+echo "DEBUG hping rc=${HP_RC:-0} out=$(head -2 /tmp/hp.out | tr '\n' '|')"
 sleep 2
 A_UDP=$(stat udp_flood_blocked)
+echo "DEBUG after: udp_flood_blocked=$A_UDP udp_dropped=$(stat udp_dropped) port_rate=$(stat port_rate_blocked) blacklist=$(stat blacklist_blocked)"
+echo "DEBUG daemon: $(tail -3 /tmp/xuanarmor-attack-test.log | tr '\n' '|')"
 check "UDP Flood 触发 udp_flood_blocked" "$([ "$A_UDP" -gt "$B_UDP" ] && echo 1 || echo 0)" "+$((A_UDP - B_UDP))"
 check "UDP 丢弃计入 udp_dropped" "$([ "$(stat udp_dropped)" -gt 0 ] && echo 1 || echo 0)" ""
 echo "测试后状态: $(api_stats)"

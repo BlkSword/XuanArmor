@@ -64,6 +64,7 @@ cleanup() {
     fi
     rm -f "$mktemp_cfg" /tmp/dummy_xdp.o /tmp/sc_recv1 /tmp/sc_recv2 2>/dev/null || true
 }
+    rm -f /run/xuanarmor-bpf/xuanarmor_xdp_link /sys/fs/bpf/xuanarmor_xdp_link 2>/dev/null || true
 trap cleanup EXIT
 
 ip netns del xuanarmor-client 2>/dev/null || true
