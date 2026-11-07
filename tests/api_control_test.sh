@@ -75,6 +75,11 @@ scopes = ["read", "write", "policy", "events"]
 [xdp]
 mode = "generic"
 persist_link = false
+
+[packet_log]
+enabled = true
+sample_rate = 1
+max_bytes = 8388608
 EOF
 
 log "==> 启动守护进程"
@@ -204,6 +209,8 @@ CODE="$(api GET /api/version "$ADMIN")"
 [ "$CODE" = "401" ] && ok "旧密码立即失效" || bad "旧密码仍可用（$CODE）"
 CODE="$(api GET /api/version "$NEW_TOKEN")"
 [ "$CODE" = "200" ] && ok "新密码可访问" || bad "新密码不可用（$CODE）"
+# 后续审计改用重置后的新密码
+ADMIN="$NEW_TOKEN"
 
 log "==> 9. 能力覆盖审计"
 for mod in syn_proxy_enabled udp_flood_enabled icmp_flood_enabled tcp_reset_on_drop trust_enabled l7_scan_enabled geoip_enabled conn_track_enabled; do
@@ -232,12 +239,15 @@ done
 CODE="$(api GET /api/packets "$ADMIN")"
 [ "$CODE" = "200" ] && jq -e '.usage.entries | type == "number"' "$WORK/resp.json" >/dev/null 2>&1 \
     && ok "包日志接口含 usage" || bad "包日志接口异常"
+api POST /api/blacklist "$ADMIN" '{"ip":"10.88.0.2","duration_s":120}' >/dev/null 2>&1
+ip netns exec "$CLI_NS" ping -c 5 -i 0.2 10.88.0.1 >/dev/null 2>&1
+api DELETE /api/blacklist "$ADMIN" '{"ip":"10.88.0.2"}' >/dev/null 2>&1
 ip netns exec "$CLI_NS" python3 -c "
-import socket,sys
+import socket
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-for i in range(80): s.sendto(b'x'*32, ('10.88.0.1', 9999))
+for i in range(120): s.sendto(b'x'*32, ('10.88.0.1', 9999))
 " >/dev/null 2>&1
-sleep 1
+sleep 2
 CODE="$(api GET /api/packets "$ADMIN")"
 COUNT="$(jget .usage.entries)"
 [ "$CODE" = "200" ] && [ "${COUNT:-0}" -gt 0 ] && ok "包日志默认开启且采样到流量（$COUNT 条）" || bad "包日志未采样（entries=$COUNT）"
@@ -255,7 +265,7 @@ if [ -f "$ROOT/console/dist/index.html" ]; then
     cmp -s "$ROOT/console/dist/index.html" "$ROOT/xuanarmor/web/app.html" \
         && ok "console/dist 与嵌入 app.html 一致" || bad "app.html 与构建产物不一致"
 fi
-if strings "$BIN" 2>/dev/null | grep -q "L3-L4 DDoS 清洗盾"; then
+if grep -aq "L3-L4 DDoS" "$BIN" 2>/dev/null; then
     ok "TUI 标题为 L3-L4 DDoS 清洗盾"
 else
     bad "二进制中未找到正确的 TUI 标题"

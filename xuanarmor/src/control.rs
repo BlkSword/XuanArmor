@@ -531,8 +531,39 @@ impl ControlState {
 
     /// 热更新部分运行时开关与速率限制参数。
     pub async fn patch_runtime(&self, patch: RuntimeConfigPatch) -> anyhow::Result<()> {
-        validate_runtime_patch(&patch)?;
         let mut snapshot = self.runtime.read().await.clone();
+        // 部分字段下发（如仅传 enabled）时，零值字段视为"未提供"，沿用当前值后再校验，
+        // 避免被 validate_runtime_patch 以 threshold=0 拒绝（v0.5.2 纠偏）。
+        let mut patch = patch;
+        if let Some(prl) = patch.port_rate_limit.as_mut() {
+            if prl.threshold == 0 {
+                prl.threshold = snapshot.port_rate_limit.threshold;
+            }
+            if prl.tick_ms == 0 {
+                prl.tick_ms = snapshot.port_rate_limit.tick_ms;
+            }
+            if prl.decay_den == 0 {
+                prl.decay_den = snapshot.port_rate_limit.decay_den;
+            }
+            if prl.block_duration_s == 0 {
+                prl.block_duration_s = snapshot.port_rate_limit.block_duration_s;
+            }
+        }
+        if let Some(rl) = patch.rate_limit.as_mut() {
+            if rl.threshold == 0 {
+                rl.threshold = snapshot.rate_limit.threshold;
+            }
+            if rl.tick_ms == 0 {
+                rl.tick_ms = snapshot.rate_limit.tick_ms;
+            }
+            if rl.decay_den == 0 {
+                rl.decay_den = snapshot.rate_limit.decay_den;
+            }
+            if rl.block_duration_s == 0 {
+                rl.block_duration_s = snapshot.rate_limit.block_duration_s;
+            }
+        }
+        validate_runtime_patch(&patch)?;
 
         if let Some(enabled) = patch.rate_limit_enabled {
             snapshot.rate_limit_enabled = enabled;
