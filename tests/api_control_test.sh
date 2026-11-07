@@ -205,6 +205,62 @@ CODE="$(api GET /api/version "$ADMIN")"
 CODE="$(api GET /api/version "$NEW_TOKEN")"
 [ "$CODE" = "200" ] && ok "新密码可访问" || bad "新密码不可用（$CODE）"
 
+log "==> 9. 能力覆盖审计"
+for mod in syn_proxy_enabled udp_flood_enabled icmp_flood_enabled tcp_reset_on_drop trust_enabled l7_scan_enabled geoip_enabled conn_track_enabled; do
+    CODE="$(api PATCH /api/config "$ADMIN" "{\"$mod\":true}")"
+    if [ "$CODE" = "200" ]; then
+        CODE2="$(api GET /api/config "$ADMIN")"
+        if [ "$(jget ".$mod")" = "true" ]; then ok "PATCH $mod 生效"; else bad "PATCH $mod 未生效"; fi
+    else
+        bad "PATCH $mod 失败（$CODE）"
+    fi
+done
+CODE="$(api PATCH /api/config "$ADMIN" '{"port_rate_limit":{"enabled":true}}')"
+[ "$CODE" = "200" ] && ok "PATCH port_rate_limit 部分字段" || bad "PATCH port_rate_limit 失败（$CODE）"
+CODE="$(api PATCH /api/config "$ADMIN" '{"fragment_policy":"rate_limit","rate_limit_block_mode":"soft"}')"
+[ "$CODE" = "200" ] && ok "PATCH 分片/软封禁策略" || bad "PATCH 策略字段失败（$CODE）"
+
+for dur in 900 3600 86400; do
+    CODE="$(api GET "/api/metrics/series?duration_s=$dur" "$ADMIN")"
+    if [ "$CODE" = "200" ] && jq -e '.series | type == "array"' "$WORK/resp.json" >/dev/null 2>&1; then
+        ok "series duration_s=$dur"
+    else
+        bad "series duration_s=$dur 异常（$CODE）"
+    fi
+done
+
+CODE="$(api GET /api/packets "$ADMIN")"
+[ "$CODE" = "200" ] && jq -e '.usage.entries | type == "number"' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "包日志接口含 usage" || bad "包日志接口异常"
+ip netns exec "$CLI_NS" python3 -c "
+import socket,sys
+s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+for i in range(80): s.sendto(b'x'*32, ('10.88.0.1', 9999))
+" >/dev/null 2>&1
+sleep 1
+CODE="$(api GET /api/packets "$ADMIN")"
+COUNT="$(jget .usage.entries)"
+[ "$CODE" = "200" ] && [ "${COUNT:-0}" -gt 0 ] && ok "包日志默认开启且采样到流量（$COUNT 条）" || bad "包日志未采样（entries=$COUNT）"
+
+for ep in /api/audit /api/audit/verify /api/map-usage /api/stats /metrics /healthz /ready; do
+    CODE="$(api GET "$ep" "$ADMIN")"
+    [ "$CODE" = "200" ] && ok "GET $ep 200" || bad "GET $ep 期望 200，实际 $CODE"
+done
+CODE="$(api GET /api/protection-modules "$ADMIN")"
+jq -e '(.modules // .) | length > 8' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "防护模块清单完整" || bad "防护模块清单异常"
+
+# 前端与 TUI 产物检查（在源码目录执行）
+if [ -f "$ROOT/console/dist/index.html" ]; then
+    cmp -s "$ROOT/console/dist/index.html" "$ROOT/xuanarmor/web/app.html" \
+        && ok "console/dist 与嵌入 app.html 一致" || bad "app.html 与构建产物不一致"
+fi
+if strings "$BIN" 2>/dev/null | grep -q "L3-L4 DDoS 清洗盾"; then
+    ok "TUI 标题为 L3-L4 DDoS 清洗盾"
+else
+    bad "二进制中未找到正确的 TUI 标题"
+fi
+
 log
 log "================ API 测试结果 ================"
 log "PASS=$PASS FAIL=$FAIL"
