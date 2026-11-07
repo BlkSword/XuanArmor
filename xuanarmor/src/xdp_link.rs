@@ -48,6 +48,10 @@ impl XdpState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct LinkMeta {
     interface: String,
+    /// 挂载时网卡的 ifindex：同名网卡被删除重建后 ifindex 会变化，
+    /// 复用旧 pinned link 会绑定到已消失的网卡，导致"看着已挂载、实际未过滤"。
+    #[serde(default)]
+    ifindex: u32,
     mode: String,
     version: String,
     updated_at: u64,
@@ -104,6 +108,16 @@ pub fn resolve_pin_dir(config: &Config) -> Option<PathBuf> {
 }
 
 /// 元数据路径：数据目录（与 redb 同目录），不写 bpffs。
+fn interface_ifindex(interface: &str) -> Option<u32> {
+    let cname = std::ffi::CString::new(interface).ok()?;
+    let index = unsafe { libc::if_nametoindex(cname.as_ptr()) };
+    if index == 0 {
+        None
+    } else {
+        Some(index)
+    }
+}
+
 fn meta_path(config: &Config) -> PathBuf {
     Path::new(&config.store_path)
         .parent()
@@ -118,6 +132,7 @@ fn read_meta(config: &Config) -> Option<LinkMeta> {
 fn write_meta(config: &Config, mode: &str) -> anyhow::Result<()> {
     let meta = LinkMeta {
         interface: config.interface.clone(),
+        ifindex: interface_ifindex(&config.interface).unwrap_or(0),
         mode: mode.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         updated_at: std::time::SystemTime::now()
@@ -208,6 +223,27 @@ fn try_reuse(ebpf: &mut Ebpf, config: &Config) -> anyhow::Result<Option<XdpState
             );
             detach_pinned(config)?;
             return Ok(None);
+        }
+        if meta.ifindex != 0 {
+            match interface_ifindex(&config.interface) {
+                Some(current) if current != meta.ifindex => {
+                    warn!(
+                        "pinned XDP link 属于 ifindex {}（网卡 {}），当前 ifindex 为 {}：网卡已重建，重新挂载",
+                        meta.ifindex, config.interface, current
+                    );
+                    detach_pinned(config)?;
+                    return Ok(None);
+                }
+                None => {
+                    warn!(
+                        "网卡 {} 不存在（或无法获取 ifindex）：重新挂载",
+                        config.interface
+                    );
+                    detach_pinned(config)?;
+                    return Ok(None);
+                }
+                _ => {}
+            }
         }
         let want = want_mode(config);
         if want != "auto" && meta.mode != want {
