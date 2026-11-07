@@ -7,6 +7,7 @@ import type { PacketSample } from '../api/types'
 import { fmtTime } from '../utils/format'
 
 const rows = ref<PacketSample[]>([])
+const sampling = ref<{ enabled: boolean; rate: number } | null>(null)
 const q = ref('')
 const action = ref('all')
 const page = ref(1)
@@ -25,6 +26,13 @@ const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, p
 
 onMounted(async () => {
   rows.value = await api.packets()
+  try {
+    const cfg = await api.config() as Record<string, unknown>
+    sampling.value = {
+      enabled: (cfg.packet_log_enabled as boolean) ?? true,
+      rate: Number(cfg.packet_log_sample_rate ?? 16) || 16,
+    }
+  } catch { /* ignore */ }
 })
 </script>
 
@@ -32,7 +40,7 @@ onMounted(async () => {
   <div class="page">
     <div class="page-head">
       <div class="page-title">包日志</div>
-      <div class="page-meta">采样包日志 · 当前 <span class="mono">{{ rows.length }}</span> 条</div>
+      <div class="page-meta">采样包日志 · 当前 <span class="mono">{{ rows.length }}</span> 条 <span v-if="sampling">· 采样 {{ sampling.enabled ? `1/${sampling.rate}` : '已关闭' }}</span></div>
       <div class="page-actions"><span class="state"><span class="dot warn"></span>采样</span></div>
     </div>
 
@@ -44,6 +52,9 @@ onMounted(async () => {
         </select>
         <div class="spacer"></div>
         <span class="muted">筛选后 {{ filtered.length }} 条</span>
+      </div>
+      <div v-if="!rows.length" class="panel-note" style="border-top: 0">
+        暂无采样记录：请在「系统设置 → 包日志」确认已启用，并将采样率调低（如 1/16）；仅 DROP 与防护项目 PASS 的流量会被采样。
       </div>
       <div class="table-wrap">
         <table class="dt">

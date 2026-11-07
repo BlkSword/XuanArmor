@@ -24,9 +24,12 @@ const attackBadge = computed(() => {
   <aside class="sidebar" :class="{ open: props.open }">
     <div class="brand">
       <div class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round">
-          <path d="M12 3 4.5 6v5.5c0 4.2 3.1 7.6 7.5 9.5 4.4-1.9 7.5-5.3 7.5-9.5V6L12 3Z" />
-          <path d="M8.8 12.1l2.1 2.1 4.3-4.4" stroke-linecap="round" />
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2.1 20.4 5.3v6.4c0 4-2.9 7.3-8.4 9.9-5.5-2.6-8.4-5.9-8.4-9.9V5.3Z"
+                fill="currentColor" />
+          <path d="M8.5 8.1 15.5 15.9M15.5 8.1 8.5 15.9" stroke="rgba(255,255,255,0.92)"
+                stroke-width="1.9" stroke-linecap="round" fill="none" />
+          <circle cx="12" cy="5.9" r="0.9" fill="rgba(255,255,255,0.95)" />
         </svg>
       </div>
       <div class="brand-name">XuanArmor</div>

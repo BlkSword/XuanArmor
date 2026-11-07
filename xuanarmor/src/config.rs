@@ -594,10 +594,16 @@ fn default_adaptive_block_duration_s() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SynProxyConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+}
+
+impl Default for SynProxyConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

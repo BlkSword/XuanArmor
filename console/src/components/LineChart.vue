@@ -39,14 +39,23 @@ function area(data: number[]) {
 /* 悬停十字线 + 数值气泡 */
 const hover = defineModel<number | null>('hover', { default: null })
 function onMove(e: MouseEvent) {
-  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  // 以 SVG 绘图区（排除左侧 Y 轴标签列）为基准，并换算到 viewBox 坐标，
+  // 避免十字线与鼠标位置错位。
+  const rect = (e.currentTarget as SVGElement).getBoundingClientRect()
+  if (!rect.width) return
   const rel = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
-  hover.value = Math.round(rel * (count.value - 1))
+  const svgX = rel * W
+  const idx = Math.round(((svgX - PAD) / (W - PAD * 2)) * (count.value - 1))
+  hover.value = Math.min(count.value - 1, Math.max(0, idx))
 }
 const hoverX = computed(() => (hover.value == null ? 0 : x(hover.value)))
 const tipStyle = computed(() => {
-  const pct = hover.value == null ? 0 : (hover.value / (count.value - 1)) * 100
-  return { left: `clamp(8px, ${pct}%, calc(100% - 150px))` }
+  if (hover.value == null) return {}
+  const pct = (hoverX.value / W) * 100
+  return {
+    left: `${pct}%`,
+    transform: 'translateX(-50%)',
+  } as Record<string, string>
 })
 const hoverLabel = computed(() => {
   if (hover.value == null) return ''
@@ -57,11 +66,15 @@ const hoverLabel = computed(() => {
 </script>
 
 <template>
-  <div class="chart-wrap" @mousemove="onMove" @mouseleave="hover = null">
+  <div class="chart-wrap">
     <div class="chart-ylabels">
       <span v-for="(t, i) in yTicks" :key="i">{{ fmtCompact(t).value }}{{ fmtCompact(t).unit }}</span>
     </div>
-    <svg class="chart" :viewBox="`0 0 ${W} ${H}`" :style="{ height: H + 'px' }" preserveAspectRatio="none">
+    <div class="chart-plot">
+      <svg
+        class="chart" :viewBox="`0 0 ${W} ${H}`" :style="{ height: H + 'px' }" preserveAspectRatio="none"
+        @mousemove="onMove" @mouseleave="hover = null"
+      >
       <g v-for="(t, i) in yTicks" :key="'g' + i">
         <line
           x1="0" :x2="W" :y1="y(t)" :y2="y(t)"
@@ -80,17 +93,18 @@ const hoverLabel = computed(() => {
         stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="3 3"
         vector-effect="non-scaling-stroke"
       />
-    </svg>
+      </svg>
+      <div v-if="hover != null" class="chart-tip" :style="tipStyle">
+        <div class="muted" style="margin-bottom: 3px">{{ hoverLabel }}</div>
+        <div v-for="s in props.series" :key="'t' + s.name" class="tt-row">
+          <i :style="{ background: s.color }"></i>
+          <span class="muted">{{ s.name }}</span>
+          <span class="mono" style="margin-left: auto">{{ (s.data[hover] ?? 0).toLocaleString() }}</span>
+        </div>
+      </div>
+    </div>
     <div class="chart-xlabels">
       <span v-for="(l, i) in props.labels" :key="i">{{ l }}</span>
-    </div>
-    <div v-if="hover != null" class="chart-tip" :style="tipStyle">
-      <div class="muted" style="margin-bottom: 3px">{{ hoverLabel }}</div>
-      <div v-for="s in props.series" :key="'t' + s.name" class="tt-row">
-        <i :style="{ background: s.color }"></i>
-        <span class="muted">{{ s.name }}</span>
-        <span class="mono" style="margin-left: auto">{{ (s.data[hover] ?? 0).toLocaleString() }}</span>
-      </div>
     </div>
   </div>
 </template>

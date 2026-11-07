@@ -13,6 +13,8 @@ const cooldown = ref(60)
 const retention = ref(30)
 const token = ref(state.token)
 const saving = ref(false)
+const packetLogEnabled = ref(true)
+const packetLogRate = ref(16)
 
 // ── API Token 管理 ──
 interface TokenInfo { name: string; role: string; scopes: string[]; source: string }
@@ -75,6 +77,8 @@ function ensureDefaults() {
   portRate.value = { ...cfg.value.port_rate_limit }
   fragmentPolicy.value = cfg.value.fragment_policy
   blockMode.value = cfg.value.rate_limit_block_mode
+  packetLogEnabled.value = cfg.value.packet_log_enabled ?? true
+  packetLogRate.value = Number(cfg.value.packet_log_sample_rate ?? 16) || 16
 }
 /** 保存后重新拉取运行时快照，让界面显示服务端实际生效值。 */
 async function reloadConfig() {
@@ -207,6 +211,8 @@ async function save() {
       fragment_policy: fragmentPolicy.value,
       rate_limit_block_mode: blockMode.value,
       // 端口聚合限速不使用指数衰减，decay/block 字段按数据面语义取 0/1/0。
+      packet_log_enabled: packetLogEnabled.value,
+      packet_log_sample_rate: Math.max(1, Math.round(Number(packetLogRate.value) || 16)),
       port_rate_limit: {
         enabled: portRate.value.enabled,
         // 输入框被清空时 v-model.number 会得到空串，这里兜底成合法值，避免 PATCH 被拒。
@@ -380,6 +386,20 @@ function resetToken() {
       </div>
       <div v-if="createdToken" class="panel-note" style="padding: 8px 12px; border-top: 0">
         新 Token 密钥（仅显示一次）：<span class="mono">{{ createdToken }}</span>
+      </div>
+    </PanelCard>
+
+    <PanelCard title="包日志" sub="采样包日志用于排障；采样率 1/N 表示平均每 N 个包记录 1 个">
+      <div class="grid grid-3">
+        <div class="field" style="min-width: 160px">
+          <label class="field-label">启用采样</label>
+          <ToggleSwitch :model-value="packetLogEnabled" @update:model-value="(v: boolean) => (packetLogEnabled = v)" />
+        </div>
+        <div class="field"><label class="field-label">采样率 1/N</label><input v-model.number="packetLogRate" class="input mono" type="number" min="1" max="65535" /></div>
+        <div class="field"><label class="field-label">当前值</label><input class="input mono" :value="packetLogEnabled ? `1/${packetLogRate}` : '已关闭'" readonly /></div>
+      </div>
+      <div class="panel-note" style="border-top: 0; padding: 10px 0 0">
+        修改后点右上角「保存运行参数」生效；内存上限（条目数/字节数）在配置文件中调整。
       </div>
     </PanelCard>
 

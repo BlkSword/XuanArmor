@@ -306,7 +306,8 @@ h1, h2, h3, h4 { margin: 0; }
   grid-column: 2; display: flex; justify-content: space-between;
   font-size: 10.5px; color: var(--text-3); font-variant-numeric: tabular-nums; margin-top: 4px;
 }
-svg.chart { width: 100%; display: block; }
+svg.chart { width: 100%; display: block; cursor: crosshair; }
+.chart-plot { position: relative; min-width: 0; }
 .chart-tip {
   position: absolute; pointer-events: none; z-index: 3;
   background: var(--surface); border: 1px solid var(--border);

@@ -121,6 +121,8 @@ pub struct RuntimeConfigPatch {
     pub tcp_reset_on_drop: Option<bool>,
     pub trust_enabled: Option<bool>,
     pub conn_track_enabled: Option<bool>,
+    pub packet_log_enabled: Option<bool>,
+    pub packet_log_sample_rate: Option<u16>,
     pub conn_track_threshold: Option<u32>,
     pub conn_track_window_ms: Option<u64>,
     pub trust_add_divisor: Option<u32>,
@@ -592,6 +594,12 @@ impl ControlState {
         }
         if let Some(enabled) = patch.conn_track_enabled {
             snapshot.conn_track_enabled = enabled;
+        }
+        if let Some(enabled) = patch.packet_log_enabled {
+            snapshot.packet_log_enabled = enabled;
+        }
+        if let Some(rate) = patch.packet_log_sample_rate {
+            snapshot.packet_log_sample_rate = rate;
         }
         if let Some(threshold) = patch.conn_track_threshold {
             snapshot.conn_track_threshold = threshold;

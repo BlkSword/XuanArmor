@@ -6,7 +6,7 @@
 
 ## 1. 项目概述
 
-**XuanArmor**（版本 `0.5.3`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
+**XuanArmor**（版本 `0.5.2`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
 
 - **数据面**：用 Rust/Aya 编写的 eBPF 程序挂载在 Linux XDP 钩子上，在包进入内核网络协议栈之前完成过滤/丢弃/挑战。
 - **控制面**：Rust + Tokio + axum，提供 REST API、中文 Web Dashboard、CLI、TUI、审计日志、持久化与告警。
@@ -76,7 +76,7 @@
 - `state.rs`：内存中的统计状态（PPS/DPS、Top 攻击源、Trust Score 分布等）。
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
 - `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
-  v0.5.3 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
+  v0.5.2 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
 - `apictl.rs`：上游编排 API（v0.5.2，未发布）：`/api/version`、`/api/openapi.json`、
   `/api/config/validate`、`/api/policy`（读取/原子下发，支持 dry-run 与 `Idempotency-Key`）、
   `/api/events`（游标）与 `/api/events/stream`（SSE）、`/api/tokens`（多 Token 管理）。
@@ -401,7 +401,7 @@ docker run -d --name xuanarmor \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/xuanarmor/config.toml:/etc/xuanarmor/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/xuanarmor:v0.5.3
+  ghcr.io/blksword/xuanarmor:v0.5.2
 ```
 
 ### 8.3 分布式 Hub
@@ -473,7 +473,7 @@ sync_rules_enabled = true
   已知限制：virtio_net 在宿主机开启 GRO_HW/CSUM 时会拒绝 native XDP，`ethtool -k` 显示
   `rx-gro-hw: on [fixed]` 时 guest 侧无解，只能跑 generic（性能显著低于 native）。
   挂载状态由后台任务每 15s 校验：程序被摘掉时 `/ready` 返回 503 并自动重挂。
-  v0.5.3 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
+  v0.5.2 起程序以 BPF link 挂载并 pin 到 bpffs（`persist_link = true`），进程停止后仍继续过滤；
   彻底卸载用 `xuanarmor detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
   容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/xuanarmor-bpf`）。
 - **eBPF 构建**：debug 构建因 `overflow-checks` 与未内联代码容易导致 verifier/bpf-linker 失败，因此工作空间默认 `opt-level = 3`；发布构建使用 `panic = abort`、`lto = true`、`strip = true`。

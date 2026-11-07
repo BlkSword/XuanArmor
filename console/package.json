@@ -1,7 +1,7 @@
 {
   "name": "xuanarmor-console",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.5.2",
   "type": "module",
   "description": "XuanArmor host protection console",
   "scripts": {

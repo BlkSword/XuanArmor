@@ -1,6 +1,6 @@
 # XuanArmor
 
-> 原名 eShield，自 v0.5.3 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
+> 原名 eShield，自 v0.5.2 起项目更名为 **XuanArmor**；可执行文件、systemd 服务名、配置路径（`/etc/xuanarmor`）与 `XUANARMOR_*` 环境变量保持不变，既有部署与升级路径不受影响。
 
 [English](README_EN.md) | 中文
 

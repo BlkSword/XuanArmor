@@ -174,6 +174,9 @@ export interface ConfigSnapshot {
   rate_limit_block_mode: RateLimitBlockMode
   /** 审计日志文件路径（文件审计关闭时可能为缺省值） */
   audit_path?: string
+  /** 包日志采样开关与采样率（1/N，越小采样越密） */
+  packet_log_enabled?: boolean
+  packet_log_sample_rate?: number
   /** 文件审计后端是否启用（/api/audit/verify 依赖它） */
   audit_enabled?: boolean
   /** 按协议 + 目的端口聚合限速参数（v0.5.0 默认启用） */
