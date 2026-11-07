@@ -272,6 +272,62 @@ else
     bad "二进制中未找到正确的 TUI 标题"
 fi
 
+log "==> 10. Token 持久化与告警通知"
+# 10.1 Token 持久化：创建运行时 Token → 重启服务 → 仍可用
+CODE="$(api POST /api/tokens "$ADMIN" '{"name":"persist-test","role":"readonly","scopes":["read"]}')"
+PERSIST_TOKEN="$(jget .token)"
+[ "$CODE" = "200" ] && [ -n "$PERSIST_TOKEN" ] && [ "$PERSIST_TOKEN" != "null" ] \
+    && ok "创建用于持久化验证的 Token" || bad "创建持久化 Token 失败（$CODE）"
+
+kill "$DAEMON_PID" 2>/dev/null || true
+sleep 1
+ip netns exec "$SRV_NS" curl -s -o /dev/null -m 1 "$BASE/ready" 2>/dev/null || true
+ip netns exec "$SRV_NS" "$BIN" start --config "$WORK/config.toml" >> "$WORK/daemon.log" 2>&1 &
+DAEMON_PID=$!
+for _ in $(seq 1 50); do
+    CODE="$(ip netns exec "$CLI_NS" curl -s -o /dev/null -m 1 -w '%{http_code}' "$BASE/ready" 2>/dev/null || true)"
+    [ "$CODE" = "200" ] && break
+    sleep 0.2
+done
+CODE="$(api GET /api/version "$PERSIST_TOKEN")"
+[ "$CODE" = "200" ] && ok "重启后运行时 Token 仍有效" || bad "重启后 Token 失效（$CODE）"
+
+# 10.2 告警通知：配置 → 测试发送 → 投递记录
+cat > "$WORK/sink.py" <<'PY'
+import http.server, sys, json
+count = 0
+class H(http.server.BaseHTTPRequestHandler):
+    def do_POST(self):
+        global count
+        length = int(self.headers.get('Content-Length') or 0)
+        body = self.rfile.read(length) if length else b''
+        count += 1
+        with open(sys.argv[2], 'a') as f:
+            f.write(json.dumps({"path": self.path, "count": count, "body": body.decode('utf-8', 'replace')[:400]}) + "\n")
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'ok')
+    def log_message(self, *a):
+        pass
+http.server.HTTPServer(('127.0.0.1', int(sys.argv[1])), H).serve_forever()
+PY
+ip netns exec "$SRV_NS" python3 "$WORK/sink.py" 18999 "$WORK/sink.out" >/dev/null 2>&1 &
+SINK_PID=$!
+sleep 0.5
+CODE="$(api PUT /api/notify "$ADMIN" '{"enabled":true,"threshold_dps":1000,"cooldown_s":60,"channels":[{"name":"test-hook","kind":"generic","url":"http://127.0.0.1:18999/hook","secret":"","enabled":true}]}')"
+[ "$CODE" = "200" ] && ok "保存通知配置" || bad "保存通知配置失败（$CODE）"
+CODE="$(api GET /api/notify "$ADMIN")"
+[ "$CODE" = "200" ] && jq -e '.channels | length == 1' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "读取通知配置" || bad "读取通知配置异常"
+CODE="$(api POST /api/notify/test "$ADMIN")"
+[ "$CODE" = "200" ] && jq -e '.sent == 1' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "测试通知发送成功" || bad "测试通知发送失败（$CODE）"
+CODE="$(api GET /api/notify/deliveries "$ADMIN")"
+jq -e '.deliveries | length >= 1 and (.[0].ok == true)' "$WORK/resp.json" >/dev/null 2>&1 \
+    && ok "投递记录可查询且成功" || bad "投递记录异常"
+[ -s "$WORK/sink.out" ] && ok "接收端实际收到通知" || bad "接收端未收到通知"
+kill "$SINK_PID" 2>/dev/null || true
+
 log
 log "================ API 测试结果 ================"
 log "PASS=$PASS FAIL=$FAIL"

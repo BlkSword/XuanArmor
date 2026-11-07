@@ -159,6 +159,8 @@ pub struct WebState {
     pub login_limiter: Arc<LoginLimiter>,
     pub packet_log: Arc<PacketLog>,
     pub map_infos: Arc<Vec<MapInfo>>,
+    /// 多通道告警通知（配置保存在 notify.json，可运行时修改）
+    pub notify: Arc<crate::notify::NotifyState>,
     /// 服务启动时刻（用于 `/api/version` 的 uptime_s）
     pub started_at: std::time::Instant,
     /// 服务启动的 Unix 时间戳（秒）
@@ -176,6 +178,7 @@ pub async fn run(
     bind: String,
     packet_log: Arc<PacketLog>,
     map_infos: Arc<Vec<MapInfo>>,
+    notify: Arc<crate::notify::NotifyState>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
     let state = Arc::new(WebState {
@@ -186,6 +189,7 @@ pub async fn run(
         login_limiter: Arc::new(LoginLimiter::new()),
         packet_log,
         map_infos,
+        notify,
         started_at: std::time::Instant::now(),
         started_unix: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

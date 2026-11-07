@@ -14,6 +14,24 @@ const retention = ref(30)
 const token = ref(state.token)
 const saving = ref(false)
 
+// ── API Token 管理 ──
+interface TokenInfo { name: string; role: string; scopes: string[]; source: string }
+const tokens = ref<TokenInfo[]>([])
+const tokenName = ref('')
+const tokenRole = ref('operator')
+const tokenScopes = ref('read,write,policy,events')
+const createdToken = ref('')
+const tokenBusy = ref(false)
+
+// ── 告警通知（多通道） ──
+interface NotifyChannel { name: string; kind: string; url: string; secret?: string; has_secret?: boolean; enabled: boolean }
+const notify = ref<{ enabled: boolean; threshold_dps: number; cooldown_s: number; channels: NotifyChannel[] }>({
+  enabled: false, threshold_dps: 1000, cooldown_s: 60, channels: [],
+})
+const deliveries = ref<Array<Record<string, unknown>>>([])
+const notifyBusy = ref(false)
+const testing = ref(false)
+
 // 「访问控制与分片」独立编辑态：避免直接 v-model 可选嵌套字段导致类型收窄问题。
 const portRate = ref<PortRateLimitConfig>({ enabled: true, threshold: 2000, tick_ms: 100 })
 const fragmentPolicy = ref<FragmentPolicy>('rate_limit')
@@ -55,7 +73,104 @@ async function reloadConfig() {
 onMounted(async () => {
   cfg.value = await api.config()
   ensureDefaults()
+  await loadTokens()
+  await loadNotify()
 })
+
+// ───────────── API Token 管理 ─────────────
+async function loadTokens() {
+  try {
+    const r = await api.tokens()
+    tokens.value = Array.isArray(r.tokens) ? r.tokens : []
+  } catch { /* 只读或旧版本忽略 */ }
+}
+async function createToken() {
+  if (!tokenName.value.trim()) {
+    toast('请填写 Token 名称', '', 'warn')
+    return
+  }
+  tokenBusy.value = true
+  createdToken.value = ''
+  try {
+    const scopes = tokenScopes.value.split(',').map((s) => s.trim()).filter(Boolean)
+    const r = await api.createToken(tokenName.value.trim(), tokenRole.value, scopes)
+    createdToken.value = String(r.token || '')
+    toast('Token 已创建', '密钥仅显示一次，请立即保存', 'ok')
+    await loadTokens()
+  } catch (e) {
+    toast('创建 Token 失败', String(e), 'danger')
+  } finally {
+    tokenBusy.value = false
+  }
+}
+async function revokeToken(name: string) {
+  tokenBusy.value = true
+  try {
+    await api.revokeToken(name)
+    toast('Token 已吊销', name, 'warn')
+    await loadTokens()
+  } catch (e) {
+    toast('吊销 Token 失败', String(e), 'danger')
+  } finally {
+    tokenBusy.value = false
+  }
+}
+
+// ───────────── 告警通知 ─────────────
+async function loadNotify() {
+  try {
+    const r = await api.notifyConfig()
+    notify.value = {
+      enabled: !!r.enabled,
+      threshold_dps: Number(r.threshold_dps ?? 1000),
+      cooldown_s: Number(r.cooldown_s ?? 60),
+      channels: Array.isArray(r.channels) ? r.channels : [],
+    }
+    deliveries.value = await api.notifyDeliveries(10)
+  } catch { /* ignore */ }
+}
+function addChannel() {
+  notify.value.channels.push({ name: `channel-${notify.value.channels.length + 1}`, kind: 'generic', url: '', secret: '', enabled: true })
+}
+function removeChannel(idx: number) {
+  notify.value.channels.splice(idx, 1)
+}
+async function saveNotify() {
+  notifyBusy.value = true
+  try {
+    await api.saveNotify({
+      enabled: notify.value.enabled,
+      threshold_dps: Number(notify.value.threshold_dps) || 0,
+      cooldown_s: Number(notify.value.cooldown_s) || 0,
+      channels: notify.value.channels.map((c) => ({
+        name: c.name,
+        kind: c.kind,
+        url: c.url,
+        secret: c.secret || '',
+        enabled: !!c.enabled,
+      })),
+    })
+    toast('通知配置已保存', '', 'ok')
+    await loadNotify()
+  } catch (e) {
+    toast('保存通知配置失败', String(e), 'danger')
+  } finally {
+    notifyBusy.value = false
+  }
+}
+async function testNotify() {
+  testing.value = true
+  try {
+    const r = await api.testNotify()
+    const sent = Number(r.sent ?? 0)
+    toast('测试通知已发送', `${sent} 个通道`, sent > 0 ? 'ok' : 'warn')
+    deliveries.value = await api.notifyDeliveries(10)
+  } catch (e) {
+    toast('测试通知失败', String(e), 'danger')
+  } finally {
+    testing.value = false
+  }
+}
 async function save() {
   if (!cfg.value) return
   saving.value = true
@@ -208,16 +323,104 @@ function resetToken() {
       </div>
     </PanelCard>
 
-    <div class="grid grid-2">
-      <PanelCard title="告警" sub="DROP 速率超过阈值时推送 Webhook">
-        <div class="grid grid-2">
-          <div class="field"><label class="field-label">Webhook 地址</label><input v-model="webhook" class="input mono" placeholder="https://open.feishu.cn/..." /></div>
-          <div class="field"><label class="field-label">触发阈值（DROP/s）</label><input v-model.number="threshold" class="input mono" type="number" /></div>
-          <div class="field"><label class="field-label">冷却时间（s）</label><input v-model.number="cooldown" class="input mono" type="number" /></div>
-          <div class="field"><label class="field-label">时序保留（天）</label><input v-model.number="retention" class="input mono" type="number" /></div>
+    <PanelCard title="API Token" sub="供上游应用远程调用；运行时 Token 显示一次密钥，可随时吊销" flush>
+      <div class="table-wrap">
+        <table class="dt">
+          <thead><tr><th>名称</th><th>角色</th><th>作用域</th><th>来源</th><th class="col-actions">操作</th></tr></thead>
+          <tbody>
+            <tr v-for="t in tokens" :key="t.name">
+              <td class="cell-main mono">{{ t.name }}</td>
+              <td>{{ t.role }}</td>
+              <td class="mono muted">{{ (t.scopes || []).join(', ') || '—' }}</td>
+              <td>{{ t.source === 'runtime' ? '运行时' : '配置文件' }}</td>
+              <td class="col-actions">
+                <div class="row-actions">
+                  <button v-if="t.source === 'runtime'" class="btn btn-sm" :disabled="tokenBusy" @click="revokeToken(t.name)">吊销</button>
+                  <span v-else class="muted" style="font-size: 11px">配置项</span>
+                </div>
+              </td>
+            </tr>
+            <tr v-if="!tokens.length"><td colspan="5" class="empty"><div class="title">暂无 Token</div>下方创建运行时 Token，或在配置文件中添加 [[api_tokens]]</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="grid grid-3" style="padding: 10px 12px 4px">
+        <div class="field"><label class="field-label">名称</label><input v-model="tokenName" class="input mono" placeholder="orchestrator-prod" /></div>
+        <div class="field"><label class="field-label">角色</label>
+          <select v-model="tokenRole" class="input">
+            <option value="operator">operator（读写策略）</option>
+            <option value="readonly">readonly（只读）</option>
+            <option value="admin">admin（全部权限）</option>
+          </select>
         </div>
-        <div class="panel-note" style="border-top: 0; padding: 10px 0 0">
-          告警参数写入配置文件后由服务端后台任务读取，控制台仅作展示与预留。
+        <div class="field"><label class="field-label">作用域（逗号分隔）</label><input v-model="tokenScopes" class="input mono" /></div>
+      </div>
+      <div class="spread" style="padding: 4px 12px 12px">
+        <button class="btn btn-primary btn-sm" :disabled="tokenBusy" @click="createToken">{{ tokenBusy ? '创建中…' : '创建 Token' }}</button>
+        <span class="muted" style="font-size: 11px">密钥仅在创建时返回一次；运行时 Token 保存在数据目录，重启后仍有效。</span>
+      </div>
+      <div v-if="createdToken" class="panel-note" style="padding: 8px 12px; border-top: 0">
+        新 Token 密钥（仅显示一次）：<span class="mono">{{ createdToken }}</span>
+      </div>
+    </PanelCard>
+
+    <div class="grid grid-2">
+      <PanelCard title="告警通知" sub="DROP 速率超过阈值时推送到已启用通道">
+        <div class="spread" style="margin-bottom: 8px">
+          <div class="field" style="min-width: 160px">
+            <label class="field-label">启用阈值告警</label>
+            <ToggleSwitch :model-value="notify.enabled" @update:model-value="(v: boolean) => (notify.enabled = v)" />
+          </div>
+          <div class="field" style="width: 160px"><label class="field-label">阈值（DROP/s）</label><input v-model.number="notify.threshold_dps" class="input mono" type="number" /></div>
+          <div class="field" style="width: 140px"><label class="field-label">冷却（s）</label><input v-model.number="notify.cooldown_s" class="input mono" type="number" /></div>
+        </div>
+        <div class="table-wrap">
+          <table class="dt">
+            <thead><tr><th>名称</th><th>类型</th><th>地址</th><th>密钥</th><th>启用</th><th class="col-actions">操作</th></tr></thead>
+            <tbody>
+              <tr v-for="(c, i) in notify.channels" :key="i">
+                <td><input v-model="c.name" class="input mono" style="width: 110px" /></td>
+                <td>
+                  <select v-model="c.kind" class="input">
+                    <option value="generic">通用 Webhook</option>
+                    <option value="dingtalk">钉钉</option>
+                    <option value="wecom">企业微信</option>
+                    <option value="feishu">飞书</option>
+                    <option value="slack">Slack</option>
+                  </select>
+                </td>
+                <td><input v-model="c.url" class="input mono" style="width: 100%" placeholder="https://..." /></td>
+                <td><input v-model="c.secret" class="input mono" style="width: 90px" :placeholder="c.has_secret ? '已保存' : '可选'" /></td>
+                <td><ToggleSwitch :model-value="c.enabled" @update:model-value="(v: boolean) => (c.enabled = v)" /></td>
+                <td class="col-actions"><div class="row-actions"><button class="btn btn-sm" @click="removeChannel(i)">删除</button></div></td>
+              </tr>
+              <tr v-if="!notify.channels.length"><td colspan="6" class="empty"><div class="title">未配置通知通道</div>点击「添加通道」配置 Webhook / 钉钉 / 企业微信 / 飞书 / Slack</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="spread" style="margin-top: 8px">
+          <button class="btn btn-sm" @click="addChannel">添加通道</button>
+          <div class="row-actions">
+            <button class="btn btn-sm" :disabled="testing" @click="testNotify">{{ testing ? '发送中…' : '发送测试' }}</button>
+            <button class="btn btn-primary btn-sm" :disabled="notifyBusy" @click="saveNotify">{{ notifyBusy ? '保存中…' : '保存通知配置' }}</button>
+          </div>
+        </div>
+        <div v-if="deliveries.length" class="mt-8">
+          <div class="muted" style="font-size: 11px; margin-bottom: 4px">最近投递</div>
+          <div class="table-wrap">
+            <table class="dt">
+              <thead><tr><th>时间</th><th>事件</th><th>通道</th><th>结果</th><th class="col-num">耗时</th></tr></thead>
+              <tbody>
+                <tr v-for="(d, i) in deliveries" :key="i">
+                  <td class="mono muted">{{ d.timestamp }}</td>
+                  <td>{{ d.event }}</td>
+                  <td>{{ d.channel }}（{{ d.kind }}）</td>
+                  <td><span class="state" :class="d.ok ? 'ok' : 'danger'"><span class="dot" :class="d.ok ? 'ok' : 'danger'"></span>{{ d.ok ? '成功' : (d.error || d.status || '失败') }}</span></td>
+                  <td class="col-num mono">{{ d.latency_ms }}ms</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </PanelCard>
 

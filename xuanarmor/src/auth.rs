@@ -14,6 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -131,14 +132,26 @@ struct TokenEntry {
 #[derive(Clone, Debug, Default)]
 pub struct AuthState {
     entries: Arc<RwLock<Vec<TokenEntry>>>,
+    /// 运行时 Token 的持久化文件（JSON，0600）；None 表示不持久化。
+    token_file: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedToken {
+    name: String,
+    token: String,
+    role: String,
+    scopes: Vec<String>,
 }
 
 impl AuthState {
-    /// 从配置构建：兼容 `api_token` / `readonly_token`，并加载 `[[api_tokens]]`。
+    /// 从配置构建：兼容 `api_token` / `readonly_token`，加载 `[[api_tokens]]`，
+    /// 并恢复 `token_file` 中持久化的运行时 Token。
     pub fn from_config(
         token: Option<String>,
         readonly: Option<String>,
         api_tokens: &[ApiTokenConfig],
+        token_file: Option<std::path::PathBuf>,
     ) -> Self {
         let mut entries = Vec::new();
 
@@ -189,8 +202,39 @@ impl AuthState {
             });
         }
 
+        if let Some(path) = &token_file {
+            match std::fs::read(path) {
+                Ok(bytes) => match serde_json::from_slice::<Vec<PersistedToken>>(&bytes) {
+                    Ok(list) => {
+                        for item in list {
+                            let role = Role::parse(&item.role).unwrap_or(Role::Operator);
+                            let scopes = if item.scopes.is_empty() {
+                                role.default_scopes()
+                            } else {
+                                item.scopes
+                            };
+                            if entries.iter().any(|e| e.name == item.name) {
+                                continue;
+                            }
+                            entries.push(TokenEntry {
+                                name: item.name,
+                                role,
+                                scopes,
+                                secret: Arc::from(item.token.into_boxed_str()),
+                                runtime: true,
+                            });
+                        }
+                    }
+                    Err(e) => tracing::warn!("解析持久化 Token 文件失败: {e}"),
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => tracing::warn!("读取持久化 Token 文件失败: {e}"),
+            }
+        }
+
         Self {
             entries: Arc::new(RwLock::new(entries)),
+            token_file,
         }
     }
 
@@ -291,6 +335,8 @@ impl AuthState {
             secret: Arc::from(secret.clone().into_boxed_str()),
             runtime: true,
         });
+        drop(guard);
+        persist_runtime_tokens(&self.entries, &self.token_file).await;
         Ok(secret)
     }
 
@@ -299,7 +345,52 @@ impl AuthState {
         let mut guard = self.entries.write().await;
         let before = guard.len();
         guard.retain(|e| !(e.runtime && e.name == name));
-        guard.len() != before
+        let changed = guard.len() != before;
+        drop(guard);
+        if changed {
+            persist_runtime_tokens(&self.entries, &self.token_file).await;
+        }
+        changed
+    }
+}
+
+/// 将当前运行时 Token 写入 `token_file`（权限 0600，先写临时文件再 rename）。
+async fn persist_runtime_tokens(
+    entries: &Arc<RwLock<Vec<TokenEntry>>>,
+    token_file: &Option<std::path::PathBuf>,
+) {
+    let Some(path) = token_file else { return };
+    let list: Vec<PersistedToken> = {
+        let guard = entries.read().await;
+        guard
+            .iter()
+            .filter(|e| e.runtime)
+            .map(|e| PersistedToken {
+                name: e.name.clone(),
+                token: e.secret.to_string(),
+                role: e.role.as_str().to_string(),
+                scopes: e.scopes.clone(),
+            })
+            .collect()
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(mut file) => {
+            use std::io::Write;
+            if let Err(e) = serde_json::to_vec_pretty(&list)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| file.write_all(&bytes).map_err(|e| e.to_string()))
+            {
+                tracing::warn!("写入持久化 Token 文件失败: {e}");
+            }
+        }
+        Err(e) => tracing::warn!("打开持久化 Token 文件失败: {e}"),
     }
 }
 

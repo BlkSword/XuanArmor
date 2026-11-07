@@ -56,6 +56,12 @@ pub fn router() -> Router<Arc<WebState>> {
             get(tokens_list_handler).post(tokens_create_handler),
         )
         .route("/api/tokens/:name", delete(tokens_delete_handler))
+        .route(
+            "/api/notify",
+            get(notify_get_handler).put(notify_put_handler),
+        )
+        .route("/api/notify/test", post(notify_test_handler))
+        .route("/api/notify/deliveries", get(notify_deliveries_handler))
 }
 
 fn error_response(status: StatusCode, code: &str, message: impl Into<String>) -> Response {
@@ -672,4 +678,71 @@ async fn tokens_delete_handler(
             format!("未找到运行时 Token: {name}（配置文件中的 Token 不可通过 API 删除）"),
         )
     }
+}
+
+// ───────────────────────── 告警通知 ─────────────────────────
+
+async fn notify_get_handler(State(state): State<Arc<WebState>>) -> Json<Value> {
+    Json(state.notify.public_config().await)
+}
+
+async fn notify_put_handler(
+    State(state): State<Arc<WebState>>,
+    Extension(ctx): Extension<AuthCtx>,
+    Json(body): Json<Value>,
+) -> Response {
+    if !ctx.role.can_write() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "只读凭据不能修改通知配置",
+        );
+    }
+    let config: crate::notify::NotifyConfig = match serde_json::from_value(body) {
+        Ok(config) => config,
+        Err(e) => {
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "invalid_config",
+                format!("通知配置解析失败: {e}"),
+            )
+        }
+    };
+    match state.notify.update(config).await {
+        Ok(json) => Json(json!({"ok": true, "config": json})).into_response(),
+        Err(e) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "save_failed",
+            format!("保存通知配置失败: {e:#}"),
+        ),
+    }
+}
+
+async fn notify_test_handler(
+    State(state): State<Arc<WebState>>,
+    Extension(ctx): Extension<AuthCtx>,
+) -> Response {
+    if !ctx.role.can_write() {
+        return error_response(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "只读凭据不能发送测试通知",
+        );
+    }
+    Json(state.notify.send_test().await).into_response()
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DeliveryQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn notify_deliveries_handler(
+    State(state): State<Arc<WebState>>,
+    Query(q): Query<DeliveryQuery>,
+) -> Json<Value> {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let items = state.notify.deliveries(limit).await;
+    Json(json!({"deliveries": items, "count": items.len()}))
 }

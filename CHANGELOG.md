@@ -17,6 +17,14 @@
 - `POST /api/config/validate`：下发前校验配置（TOML 文本或 JSON）。
 - 集成测试 `tests/api_control_test.sh`（22 项断言）。
 
+### 新增
+
+- 控制台「系统设置」新增 **API Token 管理**：查看 Token 列表、创建运行时 Token（密钥仅显示一次）、吊销；
+  运行时 Token 持久化到数据目录 `api_tokens.json`，服务重启后仍有效。
+- 新增 **多通道告警通知**：支持通用 Webhook / 钉钉 / 企业微信 / 飞书 / Slack，
+  可配置 DPS 阈值与冷却时间，支持测试发送与最近投递记录查询（`/api/notify*`）；
+  控制台「告警通知」面板完成同等配置与测试能力。
+
 ### 修复
 
 - TUI 标题文案错误（“主机级 CC 防御盾” → “主机级 L3-L4 DDoS 清洗盾”）。

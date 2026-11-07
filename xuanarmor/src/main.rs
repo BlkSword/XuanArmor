@@ -14,6 +14,7 @@ mod hub_client;
 mod ip;
 mod logging;
 mod login_limiter;
+mod notify;
 mod packet_log;
 mod state;
 mod store;
@@ -504,6 +505,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         guard.last_timestamp()
     }));
 
+    let notifier = notify::NotifyState::load(&config.store_path);
     let alert = AlertManager::new(AlertConfig {
         webhook_url: config.alert_webhook_url.clone(),
         webhook_type: config.alert_webhook_type.clone(),
@@ -511,6 +513,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
         cooldown_s: config.alert_cooldown_s,
         interface: config.interface.clone(),
     });
+    alert.attach_notifier(notifier.clone());
     // 若未配置 api_token，则自动生成随机 Token 并写回配置文件，
     // 同时在控制台打印一次完整密码（服务重启后从配置文件读取，不再变化）。
     let api_token = match config.api_token.clone().filter(|t| !t.is_empty()) {
@@ -531,7 +534,15 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
             Some(token)
         }
     };
-    let auth = AuthState::from_config(api_token, config.readonly_token.clone(), &config.api_tokens);
+    let token_file = std::path::Path::new(&config.store_path)
+        .parent()
+        .map(|dir| dir.join("api_tokens.json"));
+    let auth = AuthState::from_config(
+        api_token,
+        config.readonly_token.clone(),
+        &config.api_tokens,
+        token_file,
+    );
 
     // 控制面：封装所有 eBPF Map 操作，供 Web / CLI / SIGHUP 使用
     let control = Arc::new(
@@ -591,6 +602,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
                 web_bind,
                 packet_log,
                 map_infos,
+                notifier,
                 web_shutdown_rx,
             )
             .await

@@ -478,6 +478,50 @@ export const api = {
   async ipDetail(ip: string): Promise<any | null> {
     return fetchOrNull<any>(`/api/ip-detail?ip=${encodeURIComponent(ip)}`)
   },
+
+  // ── API Token 管理（仅 admin 可用；运行时 Token 持久化到数据目录） ──
+  async tokens(): Promise<any> {
+    if (state.mode === 'mock') {
+      return { tokens: [
+        { name: 'admin', role: 'admin', scopes: ['*'], source: 'config' },
+        { name: 'monitor', role: 'readonly', scopes: ['read', 'events'], source: 'runtime' },
+      ], count: 2 }
+    }
+    const r = await fetchOrNull<any>('/api/tokens')
+    return r ?? { tokens: [], count: 0 }
+  },
+  async createToken(name: string, role: string, scopes: string[]): Promise<any> {
+    return raw<any>('/api/tokens', { method: 'POST', body: JSON.stringify({ name, role, scopes }) })
+  },
+  async revokeToken(name: string): Promise<void> {
+    await raw(`/api/tokens/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  },
+
+  // ── 告警通知（多通道） ──
+  async notifyConfig(): Promise<any> {
+    if (state.mode === 'mock') {
+      return {
+        enabled: true, threshold_dps: 1000, cooldown_s: 60,
+        channels: [
+          { name: 'ops-webhook', kind: 'generic', url: 'https://example.com/hook', has_secret: false, enabled: true },
+        ],
+      }
+    }
+    const r = await fetchOrNull<any>('/api/notify')
+    return r ?? { enabled: false, threshold_dps: 1000, cooldown_s: 60, channels: [] }
+  },
+  async saveNotify(config: Record<string, unknown>): Promise<any> {
+    return raw<any>('/api/notify', { method: 'PUT', body: JSON.stringify(config) })
+  },
+  async testNotify(): Promise<any> {
+    return raw<any>('/api/notify/test', { method: 'POST' })
+  },
+  async notifyDeliveries(limit = 20): Promise<any[]> {
+    if (state.mode === 'mock') return []
+    const r = await fetchOrNull<any>(`/api/notify/deliveries?limit=${limit}`)
+    return r?.deliveries ?? []
+  },
+
   async ipSeries(ip: string, durationSeconds = 3600): Promise<SeriesPoint[]> {
     if (state.mode === 'mock') return []
     const r = await fetchOrNull<any>(`/api/ip-series?ip=${encodeURIComponent(ip)}&duration_s=${Math.max(60, Math.floor(durationSeconds))}`)

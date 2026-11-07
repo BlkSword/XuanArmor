@@ -671,3 +671,42 @@ curl -sS -X POST http://127.0.0.1:8720/api/tokens \
 
 **兼容性**：`api_token` / `readonly_token` 旧配置继续有效；未配置任何 Token 时保持旧行为
 （本机与外部均视为 admin，仅建议在完全可信的内网使用）。
+
+## 告警通知 API
+
+通知配置独立保存在数据目录的 `notify.json`（权限 0600），支持多种通道格式：
+
+| 方法 | 路径 | 角色 | 说明 |
+|---|---|---|---|
+| GET | `/api/notify` | 任意（只读） | 读取通知配置（密钥以 `has_secret` 表示，不回传明文） |
+| PUT | `/api/notify` | admin/operator | 保存通知配置；`secret` 传空表示保留原值 |
+| POST | `/api/notify/test` | admin/operator | 向所有启用通道发送测试通知 |
+| GET | `/api/notify/deliveries?limit=N` | 任意（只读） | 最近投递记录（最多 200 条） |
+
+配置示例：
+
+```json
+{
+  "enabled": true,
+  "threshold_dps": 1000,
+  "cooldown_s": 60,
+  "channels": [
+    {"name": "ops-webhook", "kind": "generic", "url": "https://example.com/hook", "secret": "", "enabled": true},
+    {"name": "dingtalk", "kind": "dingtalk", "url": "https://oapi.dingtalk.com/robot/send?access_token=...", "enabled": false},
+    {"name": "wecom", "kind": "wecom", "url": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=...", "enabled": false},
+    {"name": "feishu", "kind": "feishu", "url": "https://open.feishu.cn/open-apis/bot/v2/hook/...", "enabled": false},
+    {"name": "slack", "kind": "slack", "url": "https://hooks.slack.com/services/...", "secret": "xoxb-...", "enabled": false}
+  ]
+}
+```
+
+- `kind` 支持 `generic` / `dingtalk` / `wecom` / `feishu` / `slack`，服务端按平台格式封装消息；
+- DROP 速率超过 `threshold_dps` 时按 `cooldown_s` 冷却推送到所有启用通道；
+- 控制台「系统设置 → 告警通知」提供同等配置、测试发送与投递记录查看。
+
+### 运行时 Token 持久化
+
+通过 `POST /api/tokens` 创建的运行时 Token 写入数据目录 `api_tokens.json`（0600），
+服务重启后仍然有效；`DELETE /api/tokens/{name}` 吊销并同步更新文件。
+配置文件中的 `api_token` / `readonly_token` / `[[api_tokens]]` 仍以配置文件为准。
+

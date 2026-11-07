@@ -47,6 +47,7 @@ pub struct AlertManager {
     config: AlertConfig,
     client: reqwest::Client,
     last_alert_s: Mutex<u64>,
+    notifier: std::sync::Mutex<Option<Arc<crate::notify::NotifyState>>>,
 }
 
 impl AlertManager {
@@ -55,7 +56,15 @@ impl AlertManager {
             config,
             client: reqwest::Client::new(),
             last_alert_s: Mutex::new(0),
+            notifier: std::sync::Mutex::new(None),
         })
+    }
+
+    /// 挂载通知通道：阈值告警会同时推送到已启用的通知通道。
+    pub fn attach_notifier(&self, notifier: Arc<crate::notify::NotifyState>) {
+        if let Ok(mut guard) = self.notifier.lock() {
+            *guard = Some(notifier);
+        }
     }
 
     /// 根据当前总 DROP 数检查是否触发告警。调用方应周期性传入 window_s 内的增量。
@@ -142,6 +151,25 @@ impl AlertManager {
             if let Err(e) = self.client.post(url).json(&payload).send().await {
                 tracing::warn!("failed to send alert webhook: {}", e);
             }
+        }
+
+        // 同步推送到新的多通道通知（webhook/钉钉/企业微信/飞书/Slack）。
+        let notifier = self.notifier.lock().ok().and_then(|g| g.clone());
+        if let Some(notifier) = notifier {
+            let payload = serde_json::json!({
+                "event": "attack_threshold",
+                "interface": event.interface,
+                "dps": event.dps,
+                "threshold_dps": event.threshold_dps,
+                "total_dropped": event.total_dropped,
+                "rule_breakdown": event.rule_breakdown,
+                "top_attackers": event.top_attackers,
+                "message": event.message,
+                "timestamp": event.timestamp,
+            });
+            tokio::spawn(async move {
+                notifier.send_attack_alert(payload).await;
+            });
         }
     }
 
