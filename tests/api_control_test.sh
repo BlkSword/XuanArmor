@@ -239,6 +239,7 @@ done
 CODE="$(api GET /api/packets "$ADMIN")"
 [ "$CODE" = "200" ] && jq -e '.usage.entries | type == "number"' "$WORK/resp.json" >/dev/null 2>&1 \
     && ok "包日志接口含 usage" || bad "包日志接口异常"
+api POST /api/policy/apply "$ADMIN" '{"whitelist":[]}' >/dev/null 2>&1
 api POST /api/blacklist "$ADMIN" '{"ip":"10.88.0.2","duration_s":120}' >/dev/null 2>&1
 ip netns exec "$CLI_NS" ping -c 5 -i 0.2 10.88.0.1 >/dev/null 2>&1
 api DELETE /api/blacklist "$ADMIN" '{"ip":"10.88.0.2"}' >/dev/null 2>&1
