@@ -140,7 +140,7 @@ enum Commands {
     Upgrade {
         /// 新二进制路径
         #[arg(long)]
-        binary: String,
+        binary: Option<String>,
         /// 配置文件路径
         #[arg(short, long, default_value = "/etc/xuanarmor/config.toml")]
         config: String,
@@ -222,7 +222,7 @@ async fn main() -> anyhow::Result<()> {
             exec_prefix,
         } => {
             let opts = upgrade::UpgradeOptions {
-                binary: binary.into(),
+                binary: binary.unwrap_or_default().into(),
                 config: config.into(),
                 install_bin: install_bin.into(),
                 timeout_s: timeout,
