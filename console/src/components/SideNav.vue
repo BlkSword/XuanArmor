@@ -12,28 +12,6 @@ const emit = defineEmits<{ (e: 'navigate'): void }>()
 const route = useRoute()
 const active = computed(() => route.path)
 
-const XDP_SOLUTION = [
-  '检查节点配置中的 interface 是否为实际网卡名（ip link 查看）',
-  '若驱动不支持 native XDP，请在配置中设置 [xdp] mode = "generic" 后重启',
-  '确认进程以 root/CAP_BPF 运行，且内核已启用 BTF（/sys/kernel/btf/vmlinux）',
-  '查看日志排查挂载失败原因：journalctl -u xuanarmor -n 50',
-].join('\n')
-const xdp = computed(() => {
-  const s = store.stats as Record<string, unknown> | null
-  if (!s) return { text: '连接中', dot: 'warn', title: '正在连接数据面' }
-  if (s.xdp_attached === false) {
-    return { text: 'XDP 未挂载', dot: 'danger', title: `防护未生效，排查建议：\n${XDP_SOLUTION}` }
-  }
-  const mode = String(s.xdp_mode || '')
-  if (mode !== 'native' && mode !== 'generic') {
-    return { text: 'XDP 状态未知', dot: 'warn', title: `无法确认 XDP 挂载状态，建议排查：\n${XDP_SOLUTION}` }
-  }
-  return {
-    text: mode === 'native' ? 'XDP native' : 'XDP generic',
-    dot: mode === 'native' ? 'ok' : 'warn',
-    title: mode === 'native' ? 'XDP 运行在原生驱动模式' : 'XDP 运行在 generic/SKB 模式（性能低于 native）',
-  }
-})
 const attackBadge = computed(() => {
   const dps = store.stats?.current_dps || 0
   if (!dps) return ''
@@ -74,10 +52,6 @@ const attackBadge = computed(() => {
       </div>
     </div>
     <div class="side-foot">
-      <div class="state" :title="xdp.title">
-        <span class="dot" :class="xdp.dot"></span>
-        <span>{{ xdp.text }}</span>
-      </div>
       <div class="side-ver mono">v{{ appVersion }}</div>
     </div>
   </aside>
