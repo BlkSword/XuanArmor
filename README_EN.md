@@ -1,7 +1,10 @@
 # XuanArmor
 
 <p align="center">
-  <img src="design/xuanarmor-wordmark.svg" alt="XuanArmor · 玄甲" width="560" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="design/xuanarmor-wordmark-dark.svg" />
+    <img src="design/xuanarmor-wordmark.svg" alt="XuanArmor · 玄甲" width="560" />
+  </picture>
 </p>
 
 
