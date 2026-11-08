@@ -32,7 +32,7 @@ await check('l7', '/l7', ['GET /'])
 await check('projects', '/projects', ['web-public'])
 await check('geoip', '/geoip', ['威胁情报源'])
 await check('rules', '/rules', ['edge-api-01'])
-await check('settings', '/settings', ['eth0', '0.5.2', '访问控制与分片', '非首片分片策略'])
+await check('settings', '/settings', ['eth0', '0.5.3', '访问控制与分片', '非首片分片策略'])
 
 // v0.5.0 新增接口：map 水位与审计哈希链校验（直接校验后端契约）
 async function checkApi(name, path, verify) {

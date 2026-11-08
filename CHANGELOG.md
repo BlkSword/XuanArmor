@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 告警通知与控制台完善
+## 0.5.3 (2026-11-08) — 告警通知、Token 管理与控制台完善
 
 ### 新增
 
@@ -32,9 +32,9 @@
 
 - 安装模板中 `[syn_proxy]` 段落位置与默认值修正。
 
-## Unreleased — 上游编排 API
+### 上游编排 API（随 0.5.3 发布）
 
-### 新增
+#### 新增
 
 - 多 Token 与角色/作用域：`[[api_tokens]]`（name/token/role/scopes），
   角色 `admin` / `operator` / `readonly`；兼容 `api_token`、`readonly_token` 旧配置。
@@ -49,7 +49,7 @@
 - `POST /api/config/validate`：下发前校验配置（TOML 文本或 JSON）。
 - 集成测试 `tests/api_control_test.sh`（22 项断言）。
 
-### 新增
+#### 新增
 
 - 控制台「系统设置」新增 **API Token 管理**：查看 Token 列表、创建运行时 Token（密钥仅显示一次）、吊销；
   运行时 Token 持久化到数据目录 `api_tokens.json`，服务重启后仍有效。
@@ -57,7 +57,7 @@
   可配置 DPS 阈值与冷却时间，支持测试发送与最近投递记录查询（`/api/notify*`）；
   控制台「告警通知」面板完成同等配置与测试能力。
 
-### 修复
+#### 修复
 
 - TUI 标题文案错误（“主机级 CC 防御盾” → “主机级 L3-L4 DDoS 清洗盾”）。
 - 安装后输出控制台地址与**控制台密码**（仅显示一次），并把密码写入配置；
@@ -66,7 +66,7 @@
   不再只输出前缀。
 - `reset-token` 生成的新密码写回配置文件，服务重启后仍然有效。
 
-### 变更
+#### 变更
 
 - `GET /api/policy` 读取运行时生效策略（不再只读配置文件），与 `apply` 结果保持一致。
 - JWT 无变化；控制台登录 Cookie 逻辑不变。

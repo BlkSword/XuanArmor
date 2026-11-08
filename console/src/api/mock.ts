@@ -238,7 +238,7 @@ export function makeModules(stats: Stats): ModuleState[] {
 
 export function makeConfig(): ConfigSnapshot {
   return {
-    version: '0.5.2', interface: 'eth0', log_level: 'info', web_bind: '0.0.0.0:8720',
+    version: '0.5.3', interface: 'eth0', log_level: 'info', web_bind: '0.0.0.0:8720',
     store_path: '/var/lib/xuanarmor/rules.redb', rate_limit_enabled: true,
     syn_proxy_enabled: true, l7_scan_enabled: true, udp_flood_enabled: true,
     icmp_flood_enabled: true, geoip_enabled: false, geoip_default_action: 0,
@@ -252,10 +252,10 @@ export function makeConfig(): ConfigSnapshot {
 }
 
 export const hubNodes = [
-  { name: 'edge-sgp-01', ip: '172.23.83.42', version: '0.5.2', status: 'online', policies: 18, last_seen: '6s' },
-  { name: 'edge-hkg-02', ip: '172.23.83.41', version: '0.5.2', status: 'online', policies: 18, last_seen: '11s' },
+  { name: 'edge-sgp-01', ip: '172.23.83.42', version: '0.5.3', status: 'online', policies: 18, last_seen: '6s' },
+  { name: 'edge-hkg-02', ip: '172.23.83.41', version: '0.5.3', status: 'online', policies: 18, last_seen: '11s' },
   { name: 'edge-fra-03', ip: '10.8.0.14', version: '0.4.5', status: 'stale', policies: 12, last_seen: '4m' },
-  { name: 'edge-sfo-04', ip: '10.9.1.22', version: '0.5.2', status: 'online', policies: 21, last_seen: '9s' },
+  { name: 'edge-sfo-04', ip: '10.9.1.22', version: '0.5.3', status: 'online', policies: 21, last_seen: '9s' },
 ]
 
 export const threatFeeds = [

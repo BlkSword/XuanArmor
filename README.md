@@ -108,6 +108,8 @@ sudo bash scripts/install.sh --uninstall
 
 ## 1. 项目概述
 
+> **v0.5.3（2026-11-08）**：邮件告警、Token 管理、版本检测、模块默认值与数据面热路径优化、控制台滚动与深色模式组合标。
+>
 > **v0.5.2（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
 > 新进程启动时原子替换，升级/重启期间数据面不中断；新增 `xuanarmor upgrade`（备份、健康检查、失败回滚）与
 > `xuanarmor detach`；Web 监听支持 `SO_REUSEPORT` 并优雅关闭。

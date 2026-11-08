@@ -6,7 +6,7 @@
 
 ## 1. 项目概述
 
-**XuanArmor**（版本 `0.5.2`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
+**XuanArmor**（版本 `0.5.3`，变更见 CHANGELOG）是一个基于 **eBPF/XDP** 的主机级 L3-L4 网络清洗盾，专注防御 SYN/UDP/ICMP Flood、CC、网络层扫描等攻击。
 
 - **数据面**：用 Rust/Aya 编写的 eBPF 程序挂载在 Linux XDP 钩子上，在包进入内核网络协议栈之前完成过滤/丢弃/挑战。
 - **控制面**：Rust + Tokio + axum，提供 REST API、中文 Web Dashboard、CLI、TUI、审计日志、持久化与告警。
@@ -77,7 +77,7 @@
 - `event_consumer.rs`：消费 eBPF Ring Buffer 事件。
 - `web.rs`：axum HTTP 服务（控制台静态资源、REST API、Prometheus `/metrics`、审计 SSE）；
   v0.5.2 起监听器使用 `SO_REUSEPORT` 并支持优雅关闭。
-- `apictl.rs`：上游编排 API（v0.5.2，未发布）：`/api/version`、`/api/openapi.json`、
+- `apictl.rs`：上游编排 API（v0.5.3）：`/api/version`、`/api/openapi.json`、
   `/api/config/validate`、`/api/policy`（读取/原子下发，支持 dry-run 与 `Idempotency-Key`）、
   `/api/events`（游标）与 `/api/events/stream`（SSE）、`/api/tokens`（多 Token 管理）。
 - `xdp_link.rs`：XDP 挂载生命周期（v0.5.2）。把 XDP 程序挂成 BPF link 并 pin 到 bpffs
@@ -401,7 +401,7 @@ docker run -d --name xuanarmor \
   --cap-add PERFMON --cap-add IPC_LOCK \
   -v /etc/xuanarmor/config.toml:/etc/xuanarmor/config.toml:ro \
   -p 8720:8720 \
-  ghcr.io/blksword/xuanarmor:v0.5.2
+  ghcr.io/blksword/xuanarmor:v0.5.3
 ```
 
 ### 8.3 分布式 Hub
