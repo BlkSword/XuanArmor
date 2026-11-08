@@ -524,7 +524,7 @@ ebpf_log_enabled = false
 
 udp_flood_enabled = true
 icmp_flood_enabled = true
-tcp_reset_on_drop = false
+tcp_reset_on_drop = true
 
 web_bind = "0.0.0.0:8720"
 # 未设置时进程会启动时生成随机 Token 并在日志输出前缀，外部访问仍必须携带；
@@ -586,7 +586,7 @@ refuse_memory_mb = 256
 enabled = true
 
 [l7_scan]
-enabled = false
+enabled = true
 patterns = []
 
 [adaptive]

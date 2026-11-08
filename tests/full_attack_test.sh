@@ -78,6 +78,10 @@ threshold = 500           # SYNUDP/ICMP Flood 模块共享该阈值（500/100ms�
 
 [adaptive]
 enabled = false
+
+# 本套件验证 SYN Flood 检测/黑名单路径；SYN Cookie 挑战由 netns_test 覆盖
+[syn_proxy]
+enabled = false
 EOF
 
 # 3. 在防御端启动一个支持并发的轻量 HTTP 服务（用于对比允许流量）

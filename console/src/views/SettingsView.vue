@@ -199,14 +199,6 @@ async function save() {
   saving.value = true
   try {
     await api.patchConfig({
-      rate_limit_enabled: cfg.value.rate_limit_enabled,
-      syn_proxy_enabled: cfg.value.syn_proxy_enabled,
-      l7_scan_enabled: cfg.value.l7_scan_enabled,
-      udp_flood_enabled: cfg.value.udp_flood_enabled,
-      icmp_flood_enabled: cfg.value.icmp_flood_enabled,
-      geoip_enabled: cfg.value.geoip_enabled,
-      conn_track_enabled: cfg.value.conn_track_enabled,
-      tcp_reset_on_drop: cfg.value.tcp_reset_on_drop,
       // v0.5.0：分片策略 / 限速处置模式 / 协议+目的端口聚合限速
       fragment_policy: fragmentPolicy.value,
       rate_limit_block_mode: blockMode.value,
@@ -253,34 +245,9 @@ function resetToken() {
     </div>
 
     <div class="grid grid-main-side">
-      <PanelCard title="运行参数" sub="写入数据面运行时配置">
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">全局速率限制</div><div class="sr-desc">单源超过阈值后写入黑名单</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.rate_limit_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">SYN Proxy / Cookie</div><div class="sr-desc">IPv4 SYN Flood 缓解（默认开启）</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.syn_proxy_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">L7 指纹扫描</div><div class="sr-desc">扫描 TCP 载荷前 8 字节</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.l7_scan_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">UDP Flood</div><div class="sr-desc">单源 UDP 速率限制</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.udp_flood_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">ICMP Flood</div><div class="sr-desc">单源 ICMP 速率限制</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.icmp_flood_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">连接跟踪</div><div class="sr-desc">半连接数超限丢弃新 SYN</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.conn_track_enabled" />
-        </div>
-        <div class="setting-row">
-          <div class="sr-main"><div class="sr-title">DROP 时发送 TCP RST</div><div class="sr-desc">对 TCP 连接快速断开</div></div>
-          <ToggleSwitch v-if="cfg" v-model="cfg.tcp_reset_on_drop" />
+      <PanelCard title="运行参数" sub="限速处置与分片策略">
+        <div class="panel-note" style="border-top: 0; padding: 0">
+          各防护模块的启用/停用开关已统一放在「防护模块」页面；这里保留分片策略、限速处置模式等运行参数。
         </div>
       </PanelCard>
 

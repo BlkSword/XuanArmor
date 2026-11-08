@@ -20,6 +20,18 @@ onMounted(async () => {
   loading.value = false
 })
 
+async function toggle(m: ModuleState, v: boolean) {
+  const previous = m.enabled
+  m.enabled = v
+  try {
+    await api.patchModule(m.id, v)
+    toast(v ? '模块已启用' : '模块已停用', m.name, 'ok')
+  } catch (e) {
+    m.enabled = previous
+    const desc = store.role === 'readonly' ? '只读令牌不允许写操作（403）' : String(e)
+    toast('切换模块失败', desc, 'danger')
+  }
+}
 function statOf(m: ModuleState) {
   if (!m.statsKey || !s.value) return null
   return s.value[m.statsKey] as number
@@ -35,7 +47,7 @@ function compact(n: number | null) {
   <div class="page">
     <div class="page-head">
       <div class="page-title">防护模块</div>
-      <div class="page-meta">模块启停请在「系统设置 → 运行参数」中调整</div>
+      <div class="page-meta">开关即时生效</div>
       <div class="page-actions">
         <span class="state" :class="loading ? 'warn' : 'ok'"><span class="dot" :class="loading ? 'warn' : 'ok'"></span>{{ loading ? '加载中' : `${enabledCount} / ${modules.length} 启用` }}</span>
       </div>
@@ -63,6 +75,7 @@ function compact(n: number | null) {
           <span class="state" :class="m.enabled ? 'ok' : ''">
             <span class="dot" :class="m.enabled ? 'ok' : ''"></span>{{ m.enabled ? '运行中' : '已停用' }}
           </span>
+          <ToggleSwitch :model-value="m.enabled" @update:model-value="(v: boolean) => toggle(m, v)" />
 
         </div>
         <div class="mc-desc">{{ m.description }}</div>

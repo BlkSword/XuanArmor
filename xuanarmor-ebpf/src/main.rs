@@ -59,6 +59,9 @@ struct PacketCtx<'a> {
     /// 防护项目模块位图约束：命中 DEFEND 项目后按位过滤全局防御模块；
     /// PROJECT_FLAGS_ALL（u16::MAX）表示无约束（无项目或项目未配置模块）。
     project_flags: u16,
+    /// 包日志开关与采样率缓存：避免每次 DROP 采样都读一次 CONFIG map。
+    packet_log_enabled: u8,
+    packet_log_sample_rate: u16,
 }
 
 #[xdp]
@@ -91,6 +94,8 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
         rate_counted: false,
         fragment: false,
         project_flags: PROJECT_FLAGS_ALL,
+        packet_log_enabled: 0,
+        packet_log_sample_rate: 0,
     };
 
     match unsafe { (*eth).proto } {
@@ -133,6 +138,8 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
     pc.tcp_reset_on_drop = runtime.tcp_reset_on_drop;
     pc.trust_add_divisor = runtime.trust_add_divisor.max(1);
     pc.trust_sub_divisor = runtime.trust_sub_divisor.max(1);
+    pc.packet_log_enabled = runtime.packet_log_enabled;
+    pc.packet_log_sample_rate = runtime.packet_log_sample_rate;
 
     if is_whitelisted(&src_key) {
         unsafe { with_stats(|s| s.total_passed += 1) };
@@ -142,10 +149,12 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
 
     let mut action: u32;
 
-    action = check_port_acl_drop(&mut pc, runtime.port_acl_count.min(MAX_PORT_ACL as u8));
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if runtime.port_acl_count != 0 {
+        action = check_port_acl_drop(&mut pc, runtime.port_acl_count.min(MAX_PORT_ACL as u8));
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
     // 黑名单前置：既降低高频封禁源的热路径开销，也避免防护项目 PASS
@@ -156,37 +165,45 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
         return action;
     }
 
-    action = check_fragment_drop(
-        &mut pc,
-        runtime.fragment_policy,
-        runtime.port_rate_limit_enabled,
-    );
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if pc.fragment {
+        action = check_fragment_drop(
+            &mut pc,
+            runtime.fragment_policy,
+            runtime.port_rate_limit_enabled,
+        );
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
-    action = check_project_policy(&mut pc);
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if runtime.project_enabled != 0 {
+        action = check_project_policy(&mut pc);
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
-    action = check_geoip_drop(&mut pc, runtime.geoip_enabled, runtime.geoip_default_action);
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if runtime.geoip_enabled != 0 {
+        action = check_geoip_drop(&mut pc, runtime.geoip_enabled, runtime.geoip_default_action);
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
-    action = check_conn_track_drop(
-        &mut pc,
-        runtime.conn_track_enabled,
-        runtime.conn_track_threshold,
-        runtime.conn_track_window_ms,
-    );
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if runtime.conn_track_enabled != 0 {
+        action = check_conn_track_drop(
+            &mut pc,
+            runtime.conn_track_enabled,
+            runtime.conn_track_threshold,
+            runtime.conn_track_window_ms,
+        );
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
     if pc.protocol == parser::IPPROTO_TCP {
@@ -201,27 +218,36 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
         }
     }
 
-    action = check_udp_drop(
-        &mut pc,
-        runtime.udp_flood_enabled,
-        runtime.port_rate_limit_enabled,
-    );
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if pc.protocol == parser::IPPROTO_UDP && !pc.fragment {
+        action = check_udp_drop(
+            &mut pc,
+            runtime.udp_flood_enabled,
+            runtime.port_rate_limit_enabled,
+        );
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
-    action = check_icmp_drop(
-        &mut pc,
-        runtime.icmp_flood_enabled,
-        runtime.port_rate_limit_enabled,
-    );
-    if action != NO_ACTION {
-        log_packet_sample(&pc, action);
-        return action;
+    if (pc.protocol == parser::IPPROTO_ICMP || pc.protocol == parser::IPPROTO_ICMPV6)
+        && !pc.fragment
+    {
+        action = check_icmp_drop(
+            &mut pc,
+            runtime.icmp_flood_enabled,
+            runtime.port_rate_limit_enabled,
+        );
+        if action != NO_ACTION {
+            log_packet_sample(&pc, action);
+            return action;
+        }
     }
 
-    if runtime.l7_scan_enabled != 0 {
+    if runtime.l7_scan_enabled != 0
+        && pc.protocol == parser::IPPROTO_TCP
+        && runtime.l7_pattern_count != 0
+    {
         action = check_l7_drop(&mut pc, runtime.l7_pattern_count.min(MAX_L7_PATTERNS as u8));
         if action != NO_ACTION {
             log_packet_sample(&pc, action);
@@ -878,14 +904,10 @@ fn read_ports(
 /// payload_sample 复制的是 L7 载荷前 64 字节；载荷不足 64B 时 payload_bytes=0。
 #[inline(never)]
 fn log_packet_sample(pc: &PacketCtx, action: u32) {
-    let runtime = match CONFIG.get(0) {
-        Some(c) => c,
-        None => return,
-    };
-    if runtime.packet_log_enabled == 0 || runtime.packet_log_sample_rate == 0 {
+    if pc.packet_log_enabled == 0 || pc.packet_log_sample_rate == 0 {
         return;
     }
-    if unsafe { bpf_get_prandom_u32() } % runtime.packet_log_sample_rate as u32 != 0 {
+    if unsafe { bpf_get_prandom_u32() } % pc.packet_log_sample_rate as u32 != 0 {
         return;
     }
 

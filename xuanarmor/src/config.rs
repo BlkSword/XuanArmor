@@ -63,7 +63,7 @@ pub struct Config {
     pub udp_flood_enabled: bool,
     #[serde(default = "default_true")]
     pub icmp_flood_enabled: bool,
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub tcp_reset_on_drop: bool,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
@@ -576,7 +576,7 @@ pub struct AdaptiveConfig {
 impl Default for AdaptiveConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             threshold: 10,
             window_s: 5,
             block_duration_s: 300,
@@ -606,12 +606,21 @@ impl Default for SynProxyConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L7ScanConfig {
-    #[serde(default = "default_false")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
     pub patterns: Vec<L7PatternConfig>,
+}
+
+impl Default for L7ScanConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            patterns: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

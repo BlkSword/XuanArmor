@@ -80,6 +80,10 @@ persist_link = false
 enabled = true
 sample_rate = 1
 max_bytes = 8388608
+
+# 测试环境关闭自适应封禁，避免测试流量互相影响（功能本身由 netns 回归覆盖）
+[adaptive]
+enabled = false
 EOF
 
 log "==> 启动守护进程"
@@ -112,6 +116,15 @@ api() {
     ip netns exec "$CLI_NS" curl "${args[@]}"
 }
 jget() { jq -r "$1" "$WORK/resp.json" 2>/dev/null; }
+
+# 通过服务端回环解封客户端 IP：API 调用本身会经过 XDP，
+# 若客户端已被限速/自适应封禁，必须从服务端回环解封。
+unblock_from_server() {
+    ip netns exec "$SRV_NS" curl -sS -o /dev/null -X DELETE \
+        -H 'Content-Type: application/json' -d '{"ip":"10.88.0.2"}' \
+        "http://127.0.0.1:${PORT}/api/blacklist" || true
+}
+
 last_status=""
 
 log "==> 1. 发现接口"
@@ -248,7 +261,9 @@ import socket
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 for i in range(120): s.sendto(b'x'*32, ('10.88.0.1', 9999))
 " >/dev/null 2>&1
+unblock_from_server
 sleep 2
+unblock_from_server
 CODE="$(api GET /api/packets "$ADMIN")"
 COUNT="$(jget .usage.entries)"
 [ "$CODE" = "200" ] && [ "${COUNT:-0}" -gt 0 ] && ok "包日志默认开启且采样到流量（$COUNT 条）" || bad "包日志未采样（entries=$COUNT）"
@@ -273,6 +288,7 @@ else
 fi
 
 log "==> 10. Token 持久化、邮件通知与版本检测"
+unblock_from_server
 # 10.1 Token 持久化：创建运行时 Token → 重启服务 → 仍可用
 CODE="$(api POST /api/tokens "$ADMIN" '{"name":"persist-test","role":"readonly","scopes":["read"]}')"
 PERSIST_TOKEN="$(jget .token)"
