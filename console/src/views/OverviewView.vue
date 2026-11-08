@@ -49,12 +49,16 @@ const reasons = computed(() => {
     { label: '速率限制', value: v.rate_limited, tone: 'warn' as const },
     { label: 'SYN Flood', value: v.syn_flood_blocked, tone: 'accent' as const },
     { label: 'UDP Flood', value: v.udp_flood_blocked, tone: 'accent' as const },
+    { label: 'ICMP Flood', value: v.icmp_flood_blocked, tone: 'accent' as const },
     { label: 'L7 指纹', value: v.l7_blocked, tone: 'violet' as const },
     { label: 'GeoIP', value: v.geoip_blocked, tone: 'muted' as const },
+    { label: '端口聚合限速', value: v.port_rate_blocked, tone: 'warn' as const },
+    { label: '分片策略', value: v.fragment_blocked, tone: 'muted' as const },
+    { label: '自适应', value: v.adaptive_blocked, tone: 'violet' as const },
+    { label: '连接跟踪', value: v.conn_track_blocked, tone: 'muted' as const },
   ]
     .filter((x) => x.value > 0)
     .sort((a, b) => b.value - a.value)
-    .slice(0, 6)
 })
 
 const dangerLabel = computed(() => ['平稳', '关注', '警戒', '严重'][Math.min(s.value?.danger_level || 0, 3)])
@@ -108,7 +112,7 @@ let sampleLastMono = 0
 const mapSampledAt = ref(0)
 const mapTotal = computed(() => mapUsage.value?.maps.length || 0)
 const mapRows = computed<MapUsageEntry[]>(() =>
-  [...(mapUsage.value?.maps || [])].sort((a, b) => b.ratio - a.ratio).slice(0, 12),
+  [...(mapUsage.value?.maps || [])].sort((a, b) => b.ratio - a.ratio),
 )
 function mapRatioTone(m: MapUsageEntry): 'danger' | 'warn' | '' {
   const warnAt = mapUsage.value?.warn_threshold ?? 0.8
@@ -157,7 +161,7 @@ async function loadMeta() {
     api.hubStatus().catch(() => null),
   ])
   modules.value = mods
-  events.value = evs.slice(0, 8)
+  events.value = evs.slice(0, 50)
   cfg.value = config
   if (hubStatus && typeof hubStatus === 'object') {
     const h = hubStatus as Record<string, unknown>
@@ -276,7 +280,7 @@ function moduleStat(m: ModuleState) {
               <tr><th style="width: 32px">#</th><th>源地址</th><th class="col-num">命中次数</th><th style="width: 140px">占比</th><th>动作</th><th class="col-actions">操作</th></tr>
             </thead>
             <tbody>
-              <tr v-for="(a, i) in (s?.top_attackers || []).slice(0, 8)" :key="a.ip">
+              <tr v-for="(a, i) in (s?.top_attackers || [])" :key="a.ip">
                 <td class="muted mono">{{ i + 1 }}</td>
                 <td>
                   <span class="mono cell-link" @click="openDrawer('IP 详情', 'ip', { ip: a.ip, count: a.count })">{{ a.ip }}</span>
@@ -298,11 +302,13 @@ function moduleStat(m: ModuleState) {
 
       <div class="grid" style="gap: 14px; grid-template-columns: minmax(0, 1fr)">
         <PanelCard title="拦截原因分布" sub="累计">
-          <BarList :items="reasons" :format="(v: number) => { const c = fmtCompact(v); return c.value + c.unit }" />
+          <div class="scroll-y" style="max-height: 220px; padding-right: 4px">
+            <BarList :items="reasons" :format="(v: number) => { const c = fmtCompact(v); return c.value + c.unit }" />
+          </div>
         </PanelCard>
         <PanelCard title="防护模块" :sub="`${enabledModules} / ${modules.length} 启用`">
-          <div class="dl" style="margin-top: -6px">
-            <div v-for="m in modules.slice(0, 7)" :key="m.id" class="dl-row">
+          <div class="dl scroll-y" style="margin-top: -6px; max-height: 236px; padding-right: 4px">
+            <div v-for="m in modules" :key="m.id" class="dl-row">
               <span class="dl-key">
                 {{ m.name }}
                 
@@ -361,7 +367,7 @@ function moduleStat(m: ModuleState) {
             最近采样 <span class="mono">{{ mapSampledAt ? fmtAgo(mapSampledAt * 1e6) : '—' }}</span>
           </span>
         </template>
-        <div class="mu-list">
+        <div class="mu-list scroll-y" style="max-height: 300px">
           <div v-for="m in mapRows" :key="m.name" class="mu-row">
             <span class="mu-name mono" :title="`${m.name} · ${m.type || 'map'}`">{{ m.name }}</span>
             <span class="hbar-track">
@@ -380,7 +386,7 @@ function moduleStat(m: ModuleState) {
       <template #actions>
         <span class="state"><span class="dot live"></span>实时</span>
       </template>
-      <div class="table-wrap">
+      <div class="table-wrap scroll-y" style="max-height: 360px">
         <table class="dt">
           <thead><tr><th>时间</th><th>源地址</th><th>目的</th><th>协议</th><th>命中规则</th><th>动作</th><th class="col-actions">操作</th></tr></thead>
           <tbody>

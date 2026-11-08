@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 200" width="720" height="200" role="img" aria-label="XuanArmor">
+  <defs>
+    <linearGradient id="wmHex" x1="58" y1="20" x2="198" y2="238" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1C33"/>
+      <stop offset="1" stop-color="#081426"/>
+    </linearGradient>
+    <linearGradient id="wmEdge" x1="58" y1="22" x2="200" y2="234" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="wmBladeA" x1="64" y1="64" x2="192" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0F7FF"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="wmBladeB" x1="192" y1="64" x2="64" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 图形标 -->
+  <g transform="translate(24 22) scale(0.62)">
+    <path d="M128 12 218 62v90l-30 30v14l-60 44-60-44v-14l-30-30V62Z"
+          fill="url(#wmHex)" stroke="url(#wmEdge)" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M72 78l56-30 56 30v62l-56 40-56-40Z"
+          fill="none" stroke="#BFE9FF" stroke-opacity="0.16" stroke-width="2"/>
+    <path d="M62 74 100 62l94 120-38 12Z" fill="url(#wmBladeA)" opacity="0.95"/>
+    <path d="M194 74 156 62 62 182l38 12Z" fill="url(#wmBladeB)" opacity="0.95"/>
+    <circle cx="128" cy="128" r="11" fill="#0A1E36" stroke="#67E8F9" stroke-width="2"/>
+    <circle cx="128" cy="128" r="4.2" fill="#BAF3FF"/>
+  </g>
+
+  <!-- 文字标 -->
+  <text x="196" y="104" fill="#0F172A" font-family="Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif"
+        font-size="56" font-weight="700" letter-spacing="0.5">XuanArmor</text>
+  <text x="200" y="138" fill="#0EA5E9" font-family="Inter, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', Arial, sans-serif"
+        font-size="14" font-weight="600" letter-spacing="4.4">HOST-LEVEL L3-L4 DEFENSE</text>
+</svg>

@@ -710,3 +710,9 @@ input[type="checkbox"] { width: 13px; height: 13px; accent-color: var(--accent);
 .line-chart svg {
   transition: opacity 0.22s ease, transform 0.22s ease;
 }
+
+/* 列表区域滚动（总览等长列表） */
+.scroll-y { overflow-y: auto; scrollbar-width: thin; }
+.scroll-y::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-y::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 3px; }
+.scroll-y::-webkit-scrollbar-track { background: transparent; }

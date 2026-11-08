@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="XuanArmor logo">
+  <defs>
+    <linearGradient id="xaHex" x1="58" y1="20" x2="198" y2="238" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0B1C33"/>
+      <stop offset="0.55" stop-color="#0C2B4A"/>
+      <stop offset="1" stop-color="#081426"/>
+    </linearGradient>
+    <linearGradient id="xaEdge" x1="58" y1="22" x2="200" y2="234" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#67E8F9"/>
+      <stop offset="0.5" stop-color="#38BDF8"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="xaBladeA" x1="64" y1="64" x2="192" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E0F7FF"/>
+      <stop offset="0.5" stop-color="#7DD3FC"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+    <linearGradient id="xaBladeB" x1="192" y1="64" x2="64" y2="192" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#38BDF8"/>
+      <stop offset="0.55" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
+    </linearGradient>
+    <radialGradient id="xaGlow" cx="0.5" cy="0.42" r="0.55">
+      <stop offset="0" stop-color="#67E8F9" stop-opacity="0.30"/>
+      <stop offset="1" stop-color="#67E8F9" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 六边形装甲底座 -->
+  <path d="M128 12 218 62v90l-30 30v14l-60 44-60-44v-14l-30-30V62Z"
+        fill="url(#xaHex)" stroke="url(#xaEdge)" stroke-width="2.5" stroke-linejoin="round"/>
+  <path d="M128 12 218 62v90l-30 30v14l-60 44-60-44v-14l-30-30V62Z"
+        fill="url(#xaGlow)"/>
+
+  <!-- 内层结构线 -->
+  <path d="M72 78l56-30 56 30v62l-56 40-56-40Z"
+        fill="none" stroke="#BFE9FF" stroke-opacity="0.16" stroke-width="1.5"/>
+
+  <!-- 中央 X：两片交错装甲刀锋 -->
+  <path d="M62 74 100 62l94 120-38 12Z" fill="url(#xaBladeA)" opacity="0.95"/>
+  <path d="M194 74 156 62 62 182l38 12Z" fill="url(#xaBladeB)" opacity="0.95"/>
+  <path d="M100 62 118 74l-38 12Z" fill="#F2FCFF" opacity="0.9"/>
+  <path d="M156 62 138 74l38 12Z" fill="#93E5FF" opacity="0.85"/>
+
+  <!-- 装甲切割线与能量节点 -->
+  <g stroke="#D6F6FF" stroke-opacity="0.55" stroke-width="1.5" stroke-linecap="round">
+    <path d="M196 128h16"/>
+    <path d="M44 128h16"/>
+    <path d="M128 204v14"/>
+  </g>
+  <g fill="#7DD3FC">
+    <circle cx="214" cy="128" r="2.6"/>
+    <circle cx="42" cy="128" r="2.6"/>
+    <circle cx="128" cy="221" r="2.6"/>
+  </g>
+
+  <!-- 中心能量核 -->
+  <circle cx="128" cy="128" r="11" fill="#0A1E36" stroke="#67E8F9" stroke-width="1.8"/>
+  <circle cx="128" cy="128" r="4.2" fill="#BAF3FF"/>
+</svg>

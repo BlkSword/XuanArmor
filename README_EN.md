@@ -1,5 +1,10 @@
 # XuanArmor
 
+<p align="center">
+  <img src="design/xuanarmor-wordmark.svg" alt="XuanArmor · 玄甲" width="560" />
+</p>
+
+
 > Formerly eShield; the project was renamed to **XuanArmor** in v0.5.2. The executable, systemd unit, config path (`/etc/xuanarmor`) and `XUANARMOR_*` environment variables are unchanged, so existing deployments and upgrade paths keep working.
 
 [中文](README.md) | English
