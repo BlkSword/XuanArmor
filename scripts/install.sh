@@ -5,6 +5,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1
 #   sudo bash scripts/install.sh --build   # 从当前源码构建并安装
 #   sudo bash scripts/install.sh --no-start  # 只安装/升级，不启动服务
+# 国内网络加速（GitHub 代理）:
+#   curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+#   sudo GH_PROXY=https://gh-proxy.org/ bash scripts/install.sh --version 0.5.3
+#   sudo bash scripts/install.sh --gh-proxy https://gh-proxy.org/ --version 0.5.3
 set -e
 
 # ── 颜色输出 ──
@@ -32,6 +36,8 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
         --version) VERSION="${_argv[i + 1]:-}"; VERSION_EXPLICIT=1; i=$((i + 1)) ;;
         --version=*) VERSION="${_argv[i]#*=}"; VERSION_EXPLICIT=1 ;;
         --sha256) EXPECTED_SHA="${_argv[i + 1]:-}"; i=$((i + 1)) ;;
+        --gh-proxy) GH_PROXY="${_argv[i + 1]:-}"; GH_PROXY_EXPLICIT=1; i=$((i + 1)) ;;
+        --gh-proxy=*) GH_PROXY="${_argv[i]#*=}"; GH_PROXY_EXPLICIT=1 ;;
         --sha256=*) EXPECTED_SHA="${_argv[i]#*=}" ;;
         --rollback) ACTION="rollback"; ROLLBACK_DIR="${_argv[i + 1]:-}"; i=$((i + 1)) ;;
         --rollback=*) ACTION="rollback"; ROLLBACK_DIR="${_argv[i]#*=}" ;;
@@ -44,6 +50,8 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
   --no-start            安装/升级后不启动服务（便于先改配置）
   --no-systemd          不注册/不启动 systemd 服务（容器或手工管理场景）
   --sha256 <hex>        校验下载产物 SHA256（也可用 XUANARMOR_EXPECTED_SHA）
+  --gh-proxy <prefix>   GitHub 加速代理前缀（如 https://gh-proxy.org/），也可用 GH_PROXY 环境变量；
+                        多个用逗号分隔；GH_PROXY=direct 表示直连
   --rollback [dir]      回滚到备份目录（省略则使用最近一次备份）
   --uninstall           卸载（保留配置与数据）
   --purge               配合 --uninstall：同时删除 /etc/xuanarmor 与持久化数据
@@ -55,6 +63,11 @@ for ((i = 0; i < ${#_argv[@]}; i++)); do
 一键安装（管道方式）:
   curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
   curl -fsSL .../install.sh | sudo bash -s -- --version 0.5.1
+
+国内网络（GitHub 代理）:
+  curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+  sudo GH_PROXY=https://gh-proxy.org/ bash scripts/install.sh --version 0.5.1
+  sudo bash scripts/install.sh --gh-proxy https://gh-proxy.org/ --version 0.5.1
 USAGE
             exit 0
             ;;
@@ -86,12 +99,88 @@ if [ -z "${VERSION:-}" ]; then
     fi
     VERSION="${VERSION:-$DEFAULT_VERSION}"
 fi
+# ── GitHub 加速代理（国内网络） ──
+# 用法：GH_PROXY=/prefix/ 或 --gh-proxy /prefix/；支持逗号分隔多个前缀，按顺序回退。
+# 代理格式：https://gh-proxy.org/https://github.com/<owner>/<repo>/...
+GH_PROXY="${GH_PROXY:-${XUANARMOR_GH_PROXY:-${ESHIELD_GH_PROXY:-}}}"
+DEFAULT_GH_PROXY="${XUANARMOR_DEFAULT_GH_PROXY:-https://gh-proxy.org/}"
+GH_PROXY_MODE="auto"   # auto：直连优先，失败后用默认/自定义代理；user：自定义代理优先；off：仅直连
+PROXY_LIST=()
+build_proxy_list() {
+    PROXY_LIST=()
+    GH_PROXY_MODE="auto"
+    if [ "${GH_PROXY_EXPLICIT:-0}" = "1" ] && [ -z "$GH_PROXY" ]; then
+        GH_PROXY_MODE="off"
+        return 0
+    fi
+    if [ -z "$GH_PROXY" ]; then
+        GH_PROXY="$DEFAULT_GH_PROXY"
+        return 0
+    fi
+    case "$(printf '%s' "$GH_PROXY" | tr '[:upper:]' '[:lower:]')" in
+        direct | none | off)
+            GH_PROXY_MODE="off"
+            return 0
+            ;;
+    esac
+    GH_PROXY_MODE="user"
+    local _p
+    IFS=', ' read -r -a _parts <<< "$GH_PROXY"
+    for _p in "${_parts[@]}"; do
+        [ -z "$_p" ] && continue
+        _p="${_p%/}/"
+        PROXY_LIST+=("$_p")
+    done
+    if [ "${#PROXY_LIST[@]}" -eq 0 ]; then
+        GH_PROXY_MODE="auto"
+        PROXY_LIST=("$DEFAULT_GH_PROXY")
+    fi
+}
+build_proxy_list
+
+# fetch_url <原始 GitHub URL> <输出文件> [超时秒数]
+# 直连/代理按策略顺序尝试；成功时 PROXY_USED 记录命中的加速前缀（直连为空）。
+PROXY_USED=""
+fetch_url() {
+    local url="$1" out="$2" t="${3:-60}" _cand
+    local -a _cands=()
+    if [ "$GH_PROXY_MODE" = "user" ]; then
+        for _cand in "${PROXY_LIST[@]}"; do _cands+=("${_cand}${url}"); done
+        _cands+=("$url")
+    elif [ "$GH_PROXY_MODE" = "off" ]; then
+        _cands=("$url")
+    else
+        _cands=("$url")
+        for _cand in "${PROXY_LIST[@]}"; do _cands+=("${_cand}${url}"); done
+    fi
+    for _cand in "${_cands[@]}"; do
+        if curl -fsSL -L --connect-timeout 8 --max-time "$t" --retry 2 --retry-delay 1 \
+            "$_cand" -o "$out" 2>/dev/null; then
+            if [ "$_cand" = "$url" ]; then
+                PROXY_USED=""
+            else
+                PROXY_USED="$_cand"
+                PROXY_USED="${PROXY_USED%"$url"}"
+            fi
+            return 0
+        fi
+    done
+    return 1
+}
+
 # 管道安装（curl | sudo bash）时本地没有 Cargo.toml，DEFAULT_VERSION 可能尚未发布；
 # 这里优先解析 GitHub 最新 Release，失败再回退 DEFAULT_VERSION。
 lookup_latest_release() {
     command -v curl >/dev/null 2>&1 || return 0
-    curl -fsSL --max-time 8 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' | head -1
+    local _tmp _out
+    _tmp="$(mktemp /tmp/xuanarmor-latest.XXXXXX)" || return 0
+    if fetch_url "https://api.github.com/repos/${REPO}/releases/latest" "$_tmp" 10; then
+        _out="$(sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\([^"]*\)".*/\1/p' "$_tmp" | head -1)"
+        rm -f "$_tmp"
+        printf '%s' "$_out"
+        return 0
+    fi
+    rm -f "$_tmp"
 }
 if [ -z "${VERSION_EXPLICIT:-}" ] && [ ! -f "Cargo.toml" ] && [ ! -f "xuanarmor/Cargo.toml" ]; then
     LATEST_VERSION="$(lookup_latest_release || true)"
@@ -110,6 +199,13 @@ WEB_PORT=8720
 # ── 环境检测 ──
 echo "========================================="
 echo " XuanArmor v${VERSION} 安装程序"
+if [ "$GH_PROXY_MODE" = "off" ]; then
+    echo " 下载方式: 直连 GitHub"
+elif [ "$GH_PROXY_MODE" = "user" ]; then
+    echo " 下载方式: GitHub 加速代理（${PROXY_LIST[*]}）"
+else
+    echo " 下载方式: 直连优先，失败自动尝试加速代理 ${DEFAULT_GH_PROXY}"
+fi
 echo "========================================="
 echo ""
 
@@ -327,12 +423,18 @@ download_release() {
     echo "下载 XuanArmor v${VERSION} (${TARGET})..."
     echo "  $URL"
     # -f：HTTP 错误直接失败（否则 404 的 HTML 会被当成二进制装进 /usr/local/bin）
-    if ! curl -fsSL --retry 3 --retry-delay 2 "$URL" -o "$TMP_BIN"; then
+    # 国内网络可自动/手动走 GitHub 加速代理（GH_PROXY / --gh-proxy）。
+    if ! fetch_url "$URL" "$TMP_BIN" 600; then
         rm -f "$TMP_BIN"
         err "下载失败: $URL"
         err "  请检查版本号 v${VERSION} 是否存在该架构产物，或改用源码构建:"
         err "  sudo bash scripts/install.sh --build"
+        err "  国内网络可加代理重试（例如）:"
+        err "  sudo GH_PROXY=https://gh-proxy.org/ bash scripts/install.sh --version ${VERSION}"
         exit 1
+    fi
+    if [ -n "$PROXY_USED" ]; then
+        info "已通过 GitHub 加速代理下载（${PROXY_USED}）"
     fi
     if [ ! -s "$TMP_BIN" ] || [ "$(head -c 4 "$TMP_BIN" | od -An -tx1 | tr -d ' \n')" != "7f454c46" ]; then
         rm -f "$TMP_BIN"
@@ -342,7 +444,7 @@ download_release() {
 
     # 若 release 提供了 SHA256SUMS 则校验；缺失时给出明确警告而不是静默安装。
     SUMS_URL="https://github.com/${REPO}/releases/download/v${VERSION}/SHA256SUMS"
-    if curl -fsSL --retry 2 "$SUMS_URL" -o /tmp/xuanarmor-SHA256SUMS 2>/dev/null; then
+    if fetch_url "$SUMS_URL" /tmp/xuanarmor-SHA256SUMS 30; then
         EXPECTED=$(awk -v f="xuanarmor-${TARGET}" '$2 == f || $2 == "*"f {print $1; exit}' /tmp/xuanarmor-SHA256SUMS)
         ACTUAL=$(sha256sum "$TMP_BIN" | awk '{print $1}')
         if [ -n "$EXPECTED" ] && [ "$EXPECTED" != "$ACTUAL" ]; then
@@ -623,7 +725,7 @@ fi
 
 if [ -f "packaging/xuanarmor.service" ]; then
     install -m 0644 "packaging/xuanarmor.service" "$SERVICE_FILE"
-elif curl -fsSL --max-time 10 "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/xuanarmor.service" -o "$SERVICE_FILE" 2>/dev/null; then
+elif fetch_url "https://raw.githubusercontent.com/${REPO}/v${VERSION}/packaging/xuanarmor.service" "$SERVICE_FILE" 20; then
     chmod 644 "$SERVICE_FILE"
 else
     warn "未能下载 systemd 单元，使用脚本内置默认单元"

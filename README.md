@@ -31,7 +31,20 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 一行命令完成下载、SHA256 校验、安装、systemd 注册与启动：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh 
+
+> **国内网络加速**：安装脚本内置 GitHub 加速代理回退（默认 `https://gh-proxy.org/`），
+> 直连失败时会自动切换；也可显式指定（支持逗号分隔多个，`direct` 表示直连）：
+>
+> ```bash
+> # 安装脚本本身走代理下载
+> curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+>
+> # 发布产物走代理下载
+> sudo GH_PROXY=https://gh-proxy.org/ bash install.sh --version 0.5.3
+> sudo bash install.sh --gh-proxy https://gh-proxy.org/ --version 0.5.3
+> ```
+| sudo bash
 ```
 
 - 默认安装 **最新 Release**，自动识别活动网卡并生成 `/etc/xuanarmor/config.toml`；

@@ -470,3 +470,20 @@ sudo tar czf xuanarmor-hub-backup.tar.gz /var/lib/xuanarmor-hub
 ```
 
 > Hub 是单实例有状态服务，不是高可用组件：请定期备份，并在变更/升级前先备份。
+
+## 国内网络安装加速
+
+一键安装脚本支持 GitHub 加速代理。直连失败会自动回退到默认代理 `https://gh-proxy.org/`；
+也可显式指定（`GH_PROXY` 环境变量或 `--gh-proxy` 参数，多个用逗号分隔，`direct` 表示直连）：
+
+```bash
+# 脚本本身走代理下载
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
+
+# 发布产物走代理下载
+sudo GH_PROXY=https://gh-proxy.org/ bash scripts/install.sh --version 0.5.3
+sudo bash scripts/install.sh --gh-proxy https://gh-proxy.org/ --version 0.5.3
+```
+
+代理格式为 `<加速前缀><原始 GitHub URL>`，例如
+`https://gh-proxy.org/https://github.com/BlkSword/XuanArmor/releases/download/v0.5.3/xuanarmor-x86_64-unknown-linux-musl`。
