@@ -33,47 +33,24 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh 
 
-> **国内网络加速**：安装脚本内置 GitHub 加速代理回退（默认 `https://gh-proxy.org/`），
-> 直连失败时会自动切换；也可显式指定（支持逗号分隔多个，`direct` 表示直连）：
->
-> ```bash
-> # 安装脚本本身走代理下载
-> curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash
->
-> # 发布产物走代理下载
-> sudo GH_PROXY=https://gh-proxy.org/ bash install.sh --version 0.5.3
-> sudo bash install.sh --gh-proxy https://gh-proxy.org/ --version 0.5.3
-> ```
-| sudo bash
-```
+## 两个安装脚本
 
-- 默认安装 **最新 Release**，自动识别活动网卡并生成 `/etc/xuanarmor/config.toml`；
-- 安装完成后访问 `http://<服务器IP>:8720` 进入控制台（首次登录先执行 `sudo xuanarmor reset-token` 获取 Token）；
-- 确认防护状态：`curl -s http://127.0.0.1:8720/ready` 返回 `200` 表示服务就绪且 XDP 已挂载。
-
-常用变体：
+| 脚本 | 适用场景 |
+|---|---|
+| `scripts/install.sh` | 直连 GitHub（海外网络/可正常访问 GitHub） |
+| `scripts/install-cn.sh` | 国内网络，下载自动走加速站 `https://gh-proxy.org/` |
 
 ```bash
-# 指定版本
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1
+# 直连版
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.3
 
-# 指定版本并校验 SHA256
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.1 --sha256 <官方 SHA256>
-
-# 只安装不启动（先修改配置，再 systemctl start xuanarmor）
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --no-start
-
-# 从源码构建并安装（需要 rustup / clang / bpf-linker）
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh -o /tmp/install.sh && sudo bash /tmp/install.sh --build
-
-# 升级（已安装 v0.5.2+ 时走平滑升级，数据面不中断）、回滚、卸载
-sudo bash scripts/install.sh --version 0.5.1
-sudo bash scripts/install.sh --rollback
-sudo bash scripts/install.sh --uninstall
+# 加速版（国内推荐；脚本本身也经加速站下载）
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install-cn.sh | sudo bash -s -- --version 0.5.3
 ```
 
-环境要求：Linux 内核 ≥ 5.10 且启用 BTF、root 权限；建议 ≥ 512MB 内存（详见 [docs/deployment.md](docs/deployment.md)）。
-升级、回滚与配置说明见 [docs/operations.md](docs/operations.md)。
+加速站前缀可用 `XUANARMOR_GH_PROXY` 覆盖，例如
+`sudo XUANARMOR_GH_PROXY=https://gh-proxy.org/ bash install-cn.sh --version 0.5.3`。
+
 
 ## 控制台预览
 
