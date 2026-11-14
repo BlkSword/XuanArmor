@@ -44,6 +44,12 @@ async function load() {
     ])
     blocks.value = b.items
     total.value = b.total
+    // 删除/筛选后 total 变小，页码收敛到最后一页，避免停在空白页
+    const maxPage = Math.max(1, Math.ceil(b.total / pageSize))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      return load()
+    }
     whites.value = w
     acls.value = a
     reasonOptions.value = [...new Set([
@@ -72,8 +78,14 @@ watch([q, reason, origin], () => {
 onBeforeUnmount(() => {
   if (filterTimer) window.clearTimeout(filterTimer)
 })
-onMounted(load)
-window.addEventListener('xuanarmor:saved', () => load())
+const onSaved = () => load()
+onMounted(() => {
+  window.addEventListener('xuanarmor:saved', onSaved)
+  load()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('xuanarmor:saved', onSaved)
+})
 
 function prevPage() {
   if (page.value <= 1) return

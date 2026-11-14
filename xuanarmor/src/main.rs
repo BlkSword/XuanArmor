@@ -1405,6 +1405,7 @@ async fn sync_map_entries(
                     name: info.name.clone(),
                     entries,
                     max_entries: info.max_entries,
+                    capped: entries >= cap as u64,
                 })
             })
             .collect();

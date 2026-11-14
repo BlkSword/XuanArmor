@@ -34,6 +34,12 @@ async function load() {
     })
     rows.value = r.items
     total.value = r.total
+    // 翻页/刷新后 total 变小：收敛到最后一页，避免空白页
+    const maxPage = Math.max(1, Math.ceil(r.total / pageSize))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      return load()
+    }
     actorOptions.value = [...new Set([
       ...actorOptions.value,
       ...r.items.map((x) => x.actor).filter(Boolean),

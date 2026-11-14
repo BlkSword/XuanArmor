@@ -64,7 +64,8 @@ impl From<PacketSample> for PacketSampleEntry {
             src_port: sample.src_port,
             dst_port: sample.dst_port,
             protocol: sample.protocol,
-            action: sample.action,
+            // eBPF 侧 0=DROP/1=PASS；API 统一为 1=DROP/2=PASS，与攻击事件/前端约定一致。
+            action: if sample.action == 1 { 2 } else { 1 },
             rule_id: sample.rule_id,
             packet_len: sample.packet_len,
             payload_bytes: sample.payload_bytes,
@@ -93,6 +94,9 @@ pub struct PacketLogQuery {
     pub rule: Option<u16>,
     pub from_ns: Option<u64>,
     pub to_ns: Option<u64>,
+    /// 时间游标：只返回时间戳严格早于该值的样本（v0.5.4，游标翻页用）
+    #[serde(default)]
+    pub before_ns: Option<u64>,
     /// 分页偏移（v0.5.4，控制台服务端翻页）
     #[serde(default)]
     pub offset: usize,
@@ -157,17 +161,22 @@ impl PacketLog {
         )
     }
 
-    /// 按条件过滤后的快照（新→旧）。锁内只做拷贝，过滤/格式化在锁外完成，
-    /// 避免阻塞 Ring Buffer 采样写入。
+    /// 按条件过滤后的快照（新→旧）。
+    ///
+    /// v0.5.4：过滤在锁内直接完成，只克隆命中项，避免每页请求先复制整表
+    /// （5 万条 ≈ 7 MB）再过滤；只有带 `ip` 过滤时才做 IP 字符串格式化。
     fn filtered_snapshot(&self, opts: &PacketLogQuery) -> Vec<PacketSample> {
-        let snapshot: Vec<PacketSample> = {
-            let entries = self.entries.lock().unwrap();
-            entries.iter().rev().copied().collect()
-        };
-        let ip_filter = opts.ip.as_deref().map(|s| s.to_lowercase());
-        snapshot
-            .into_iter()
+        let ip_filter = opts.ip.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+        let entries = self.entries.lock().unwrap();
+        entries
+            .iter()
+            .rev()
             .filter(|s| {
+                if let Some(before) = opts.before_ns {
+                    if s.timestamp_ns >= before {
+                        return false;
+                    }
+                }
                 if let Some(ip) = &ip_filter {
                     let src = format_ip_for_filter(&s.src_ip, s.family);
                     let dst = format_ip_for_filter(&s.dst_ip, s.family);
@@ -207,6 +216,7 @@ impl PacketLog {
                 }
                 true
             })
+            .copied()
             .collect()
     }
 

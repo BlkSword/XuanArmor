@@ -274,6 +274,8 @@ export interface AttackEventsOptions {
 export interface PacketsOptions {
   limit?: number
   offset?: number
+  /** 时间游标（wall-clock 纳秒）：只返回早于该值的样本，避免环形缓冲写入导致 offset 翻页重复 */
+  before_ns?: number
   /** 匹配源/目的 IP */
   ip?: string
   /** 1=DROP / 2=PASS */
@@ -423,6 +425,7 @@ export const api = {
     const params = new URLSearchParams()
     params.set('limit', String(limit))
     if (offset) params.set('offset', String(offset))
+    if (opts.before_ns) params.set('before_ns', String(opts.before_ns))
     if (opts.ip) params.set('ip', opts.ip)
     if (opts.action != null) params.set('action', String(opts.action))
     const r = await fetchOrNull<any>(`/api/packets?${params.toString()}`)

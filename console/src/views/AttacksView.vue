@@ -35,6 +35,12 @@ async function load() {
     })
     rows.value = r.items
     total.value = r.total
+    // 翻页/刷新后 total 变小：收敛到最后一页，避免空白页
+    const maxPage = Math.max(1, Math.ceil(r.total / pageSize))
+    if (page.value > maxPage) {
+      page.value = maxPage
+      return load()
+    }
     windowSize.value = r.window
     // 翻页/筛选后清空跨页选中，避免批量封禁误伤不可见条目
     selected.value = new Set()

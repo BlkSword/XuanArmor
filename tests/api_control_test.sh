@@ -276,6 +276,18 @@ CODE="$(api GET /api/protection-modules "$ADMIN")"
 jq -e '(.modules // .) | length > 8' "$WORK/resp.json" >/dev/null 2>&1 \
     && ok "防护模块清单完整" || bad "防护模块清单异常"
 
+# gzip 协商压缩（v0.5.4）：JSON 响应 >=512B 应带 Content-Encoding: gzip
+GZ_HEADERS="$(ip netns exec "$SRV_NS" curl -sS -D - -o /dev/null -H 'Accept-Encoding: gzip' \
+    "http://127.0.0.1:${PORT}/api/config" 2>/dev/null || true)"
+echo "$GZ_HEADERS" | grep -qi '^content-encoding: gzip' \
+    && ok "gzip 响应压缩生效" || bad "gzip 响应压缩未生效"
+
+# 包日志 action 过滤（v0.5.4：1=DROP / 2=PASS）
+CODE="$(api GET '/api/packets?action=1' "$ADMIN")"
+[ "$CODE" = "200" ] && ok "包日志 action=1（DROP）过滤可用" || bad "包日志 action=1 过滤异常（$CODE）"
+CODE="$(api GET '/api/packets?action=2' "$ADMIN")"
+[ "$CODE" = "200" ] && ok "包日志 action=2（PASS）过滤可用" || bad "包日志 action=2 过滤异常（$CODE）"
+
 # 前端与 TUI 产物检查（在源码目录执行）
 if [ -f "$ROOT/console/dist/index.html" ]; then
     cmp -s "$ROOT/console/dist/index.html" "$ROOT/xuanarmor/web/app.html" \

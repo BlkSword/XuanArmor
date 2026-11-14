@@ -326,8 +326,10 @@ v0.5.0 可写字段：
 | `limit` | 100 | 每页条数，上限 1000 |
 | `offset` | 0 | 分页偏移（v0.5.4） |
 | `ip` / `port` / `protocol` / `action` / `rule` | — | 过滤条件（`ip` 匹配源或目的地址） |
+| `before_ns` | — | 游标：只返回时间戳早于该 wall-clock 纳秒的样本（推荐翻页方式，避免环形缓冲写入导致 offset 重复） |
 
-响应新增 `total`（过滤后总条数）与 `limit`/`offset`；`usage` 为缓冲占用（`entries`/`bytes`）。
+- `action` 取值：**1=DROP、2=PASS**（v0.5.4 统一；旧值 0 按 DROP 兼容处理）；
+- 响应新增 `total`（过滤后总条数）、`limit`/`offset`、`before_ns`；`usage` 为缓冲占用（`entries`/`bytes`）。
 
 ### GET /api/audit（v0.5.4）
 
@@ -398,7 +400,7 @@ v0.5.0 可写字段：
 | `limit` | 200 | 每页条数，上限 2000 |
 | `offset` | 0 | 分页偏移 |
 | `q` | — | IP 子串过滤 |
-| `reason` | — | 封禁原因中文标签（与响应 `reason` 一致），如 `速率限制` |
+| `reason` | — | 封禁原因：中文标签（与响应 `reason` 一致，如 `速率限制`）或规则 ID（数字，推荐） |
 | `origin` | — | 来源标签：`api` / `adaptive` / `config` / `policy` / `data` |
 
 结果按封禁时间（`created_ns`）倒序，同时间按 IP 排序，翻页顺序稳定。

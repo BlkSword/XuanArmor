@@ -659,7 +659,7 @@ async fn map_usage_handler(State(state): State<Arc<WebState>>) -> Json<serde_jso
     }
     Json(serde_json::json!({
         "maps": items,
-        "warn_threshold": 0.8,
+        "warn_threshold": crate::alert::MAP_USAGE_WARN_THRESHOLD,
         // 单表采样遍历上限：entries == sampled_cap 时真实值可能更大（显示 20000+）
         "sampled_cap": MAP_ENTRY_SAMPLE_CAP,
         "sampled_ns": state.stats.map_entries_updated_ns.load(Ordering::Relaxed),
@@ -981,6 +981,16 @@ fn default_blacklist_limit() -> usize {
     200
 }
 
+/// 黑名单分页的轻量中间结构：过滤/排序阶段不构造 JSON。
+struct BlacklistRow {
+    first_seen_ns: u64,
+    ip: String,
+    reason: u16,
+    last_reason: u16,
+    expires_ns: u64,
+    hits: u32,
+}
+
 /// 列出 BLACKLIST map 中仍有效的条目（数据面动态封禁与 API/Hub 封禁）。
 ///
 /// 服务端过滤 + 分页：`{entries, count, total, limit, offset}`。
@@ -997,9 +1007,13 @@ async fn list_blacklist_handler(
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
     let reason_filter = q.reason.as_deref().filter(|s| !s.is_empty());
+    let reason_id_filter = reason_filter.and_then(|s| s.parse::<u16>().ok());
+    let reason_label_filter = reason_filter.filter(|s| s.parse::<u16>().is_err());
     let origin_filter = q.origin.as_deref().filter(|s| !s.is_empty());
 
-    let (matched, total) = {
+    // 两阶段：先只收集轻量行（IP/原因/时间/命中数）并排序，最后仅为当前页构造 JSON。
+    // BLACKLIST 上限 10 万条，旧实现为每条都构造 JSON 后再切片，翻页开销很大。
+    let mut rows: Vec<BlacklistRow> = {
         let mut guard = state.control.ebpf.lock().await;
         let blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
             .map_mut("BLACKLIST")
@@ -1009,9 +1023,7 @@ async fn list_blacklist_handler(
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
             })?;
 
-        // (排序键, IP 字符串, 展示用 JSON)：先按 created_ns 倒序，同时间按 IP，
-        // 保证翻页顺序稳定（LRU map 的遍历顺序不稳定）。
-        let mut rows: Vec<(u64, String, serde_json::Value)> = Vec::new();
+        let mut rows: Vec<BlacklistRow> = Vec::new();
         for (key, e) in blacklist.iter().flatten() {
             if !(e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT
                 || e.blocked_until_ns > now_ns)
@@ -1025,9 +1037,13 @@ async fn list_blacklist_handler(
                 }
             }
             let reason = e.block_reason as u16;
-            let reason_label = rule_display_name(reason);
-            if let Some(want) = reason_filter {
-                if reason_label != want {
+            // reason 支持按规则 ID（数字）或中文标签过滤，避免文案调整后外部调用失效。
+            if let Some(want_id) = reason_id_filter {
+                if reason != want_id {
+                    continue;
+                }
+            } else if let Some(want_label) = reason_label_filter {
+                if rule_display_name(reason) != want_label {
                     continue;
                 }
             }
@@ -1037,41 +1053,46 @@ async fn list_blacklist_handler(
                     continue;
                 }
             }
-            let last_reason = e.last_reason as u16;
-            rows.push((
-                e.first_seen_ns,
-                ip.clone(),
-                serde_json::json!({
-                    "ip": ip,
-                    "reason": reason_label,
-                    "origin": origin_label,
-                    // 叠加原因：首次触发后，其它模块（自适应/威胁情报等）再命中的原因。
-                    // 空字符串表示没有叠加，便于控制台区分「只触发一次」和「多模块命中」。
-                    "last_reason": if last_reason != 0 && last_reason != reason {
-                        rule_display_name(last_reason)
-                    } else {
-                        ""
-                    },
-                    "created_ns": e.first_seen_ns,
-                    "expires_ns": if e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT {
-                        0
-                    } else {
-                        e.blocked_until_ns
-                    },
-                    "hits": e.hit_count,
-                }),
-            ));
+            rows.push(BlacklistRow {
+                first_seen_ns: e.first_seen_ns,
+                ip,
+                reason,
+                last_reason: e.last_reason as u16,
+                expires_ns: if e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT {
+                    0
+                } else {
+                    e.blocked_until_ns
+                },
+                hits: e.hit_count,
+            });
         }
-        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        let total = rows.len();
-        let page = rows
-            .into_iter()
-            .skip(offset)
-            .take(limit)
-            .map(|(_, _, value)| value)
-            .collect::<Vec<_>>();
-        (page, total)
+        rows
     };
+    // 按创建时间倒序、同时间按 IP，保证 offset 翻页顺序稳定（LRU map 遍历顺序不稳定）。
+    rows.sort_by(|a, b| b.first_seen_ns.cmp(&a.first_seen_ns).then_with(|| a.ip.cmp(&b.ip)));
+    let total = rows.len();
+    let matched: Vec<serde_json::Value> = rows
+        .into_iter()
+        .skip(offset)
+        .take(limit)
+        .map(|r| {
+            let reason_label = rule_display_name(r.reason);
+            serde_json::json!({
+                "ip": r.ip,
+                "reason": reason_label,
+                "origin": block_origin_label(r.reason),
+                // 叠加原因：首次触发后，其它模块（自适应/威胁情报等）再命中的原因。
+                "last_reason": if r.last_reason != 0 && r.last_reason != r.reason {
+                    rule_display_name(r.last_reason)
+                } else {
+                    ""
+                },
+                "created_ns": r.first_seen_ns,
+                "expires_ns": r.expires_ns,
+                "hits": r.hits,
+            })
+        })
+        .collect();
     Ok(Json(serde_json::json!({
         "entries": matched,
         "count": matched.len(),
@@ -1644,10 +1665,14 @@ struct PacketQuery {
     port: Option<u16>,
     #[serde(default)]
     protocol: Option<u8>,
+    /// 动作过滤（API 语义）：1=DROP，2=PASS（兼容旧值 0=DROP）。
     #[serde(default)]
     action: Option<u8>,
     #[serde(default)]
     rule: Option<u16>,
+    /// 时间游标：只返回早于该 wall-clock 纳秒的样本（v0.5.4 游标翻页）
+    #[serde(default)]
+    before_ns: Option<u64>,
     /// 分页偏移（v0.5.4，控制台服务端翻页）
     #[serde(default)]
     offset: usize,
@@ -1668,14 +1693,28 @@ async fn packets_handler(
 ) -> Json<serde_json::Value> {
     let limit = q.limit.clamp(1, 1000);
     let offset = q.offset.min(1_000_000);
+    // API 语义 1=DROP/2=PASS → eBPF 样本语义 0=DROP/1=PASS。
+    let raw_action = q.action.map(|a| if a == 2 { 1u8 } else { 0u8 });
+    // before_ns 是 wall-clock 时间戳，样本内部是单调时钟，需要反向换算。
+    // wall_clock_offset_ns 为 i128（wall − monotonic），这里做正负保护后再转回 u64。
+    let before_monotonic = q.before_ns.map(|wall| {
+        let offset = wall_clock_offset_ns();
+        let mono = (wall as i128).saturating_sub(offset);
+        if mono <= 0 {
+            0
+        } else {
+            mono as u64
+        }
+    });
     let query = PacketLogQuery {
         ip: q.ip,
         port: q.port,
         protocol: q.protocol,
-        action: q.action,
+        action: raw_action,
         rule: q.rule,
         from_ns: None,
         to_ns: None,
+        before_ns: before_monotonic,
         offset,
         limit,
     };
@@ -1691,6 +1730,7 @@ async fn packets_handler(
         "total": total,
         "limit": limit,
         "offset": offset,
+        "before_ns": q.before_ns,
         "usage": {
             "entries": packet_log_entries,
             "bytes": packet_log_bytes,
@@ -1774,6 +1814,7 @@ async fn ip_detail_handler(
         rule: None,
         from_ns: None,
         to_ns: None,
+        before_ns: None,
         offset: 0,
         limit: 100,
     });
@@ -1786,7 +1827,8 @@ async fn ip_detail_handler(
     let mut pass_count = 0u64;
     let mut port_counts: HashMap<u16, u64> = HashMap::new();
     for s in &samples {
-        if s.action == 0 {
+        if s.action == 1 {
+            // 1=DROP（API 语义，见 packet_log::PacketSampleEntry）
             drop_count += 1;
         } else {
             pass_count += 1;
@@ -1848,6 +1890,7 @@ async fn ip_series_handler(
         rule: None,
         from_ns: Some(from_ns),
         to_ns: None,
+        before_ns: None,
         offset: 0,
         limit: 10000,
     });
@@ -1865,7 +1908,8 @@ async fn ip_series_handler(
         let wall_ts_ns = (s.timestamp_ns as i128 + offset_ns).max(0) as u64;
         let minute = wall_ts_ns / 60_000_000_000;
         let entry = buckets.entry(minute).or_insert((0, 0));
-        if s.action == 0 {
+        if s.action == 1 {
+            // 1=DROP（API 语义）
             entry.0 += 1;
         } else {
             entry.1 += 1;
@@ -1983,7 +2027,7 @@ async fn attack_events_handler(
         "count": events.len(),
         "total": total,
         "window": ATTACK_EVENT_WINDOW,
-        "truncated": total > events.len(),
+        "truncated": total > offset + events.len(),
         "limit": limit,
         "offset": offset,
     }))

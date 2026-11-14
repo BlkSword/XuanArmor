@@ -63,6 +63,8 @@ pub struct MapWatermark {
     pub name: String,
     pub entries: u64,
     pub max_entries: u64,
+    /// entries 是否已达到采样上限（真实值可能更大）——此时即使比例没到阈值也告警。
+    pub capped: bool,
 }
 
 impl AlertManager {
@@ -195,11 +197,15 @@ impl AlertManager {
     /// 请求路径不触发；告警按 [`MAP_USAGE_ALERT_COOLDOWN_S`] 限频，避免持续
     /// 高水位刷屏。webhook 与通知通道（邮件）同时投递，与 DPS 告警互不抑制。
     pub async fn check_map_usage(&self, maps: &[MapWatermark]) {
+        // 注意：entries 受采样上限（MAP_ENTRY_SAMPLE_CAP）截断。除了按比例判断，
+        // 达到采样上限也要告警——大容量 map（max > 上限/阈值比例）否则永远达不到比例阈值。
         let over: Vec<&MapWatermark> = maps
             .iter()
             .filter(|m| {
                 m.max_entries > 0
-                    && (m.entries as f64 / m.max_entries as f64) >= MAP_USAGE_WARN_THRESHOLD
+                    && (m.capped
+                        || (m.entries as f64 / m.max_entries as f64)
+                            >= MAP_USAGE_WARN_THRESHOLD)
             })
             .collect();
         if over.is_empty() {
@@ -217,13 +223,17 @@ impl AlertManager {
         let summary = over
             .iter()
             .map(|m| {
-                format!(
-                    "{}({:.0}%: {}/{})",
-                    m.name,
-                    m.entries as f64 / m.max_entries as f64 * 100.0,
-                    m.entries,
-                    m.max_entries
-                )
+                if m.capped {
+                    format!("{}(≥{}条，已达采样上限)", m.name, m.entries)
+                } else {
+                    format!(
+                        "{}({:.0}%: {}/{})",
+                        m.name,
+                        m.entries as f64 / m.max_entries as f64 * 100.0,
+                        m.entries,
+                        m.max_entries
+                    )
+                }
             })
             .collect::<Vec<_>>()
             .join(", ");
@@ -246,6 +256,7 @@ impl AlertManager {
                         "entries": m.entries,
                         "max": m.max_entries,
                         "ratio": m.entries as f64 / m.max_entries as f64,
+                        "capped": m.capped,
                     })
                 })
                 .collect::<Vec<_>>(),

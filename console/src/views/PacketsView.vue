@@ -14,19 +14,20 @@ const usage = ref({ entries: 0, bytes: 0 })
 const sampling = ref<{ enabled: boolean; rate: number } | null>(null)
 const q = ref('')
 const action = ref('all')
-const page = ref(1)
 const pageSize = 25
 const loading = ref(false)
+/** 游标栈：cursors[0] = 第一页（无游标），翻页时压入上一页最后一条样本的时间戳 */
+const cursors = ref<Array<number | undefined>>([undefined])
+const pageNo = computed(() => cursors.value.length)
+const hasMore = computed(() => rows.value.length >= pageSize)
 
-const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
-
-/** v0.5.4：服务端分页 + 服务端 IP/动作过滤（搜索框匹配源/目的 IP）。 */
+/** v0.5.4：服务端过滤 + 游标翻页（before_ns），避免环形缓冲写入导致 offset 翻页重复。 */
 async function load() {
   loading.value = true
   try {
     const r = await api.packets({
       limit: pageSize,
-      offset: (page.value - 1) * pageSize,
+      before_ns: cursors.value[cursors.value.length - 1],
       ip: q.value.trim() || undefined,
       action: action.value === 'all' ? undefined : (action.value === 'DROP' ? 1 : 2),
     })
@@ -42,7 +43,7 @@ let filterTimer: number | undefined
 watch([q, action], () => {
   if (filterTimer) window.clearTimeout(filterTimer)
   filterTimer = window.setTimeout(() => {
-    page.value = 1
+    cursors.value = [undefined]
     load()
   }, 250)
 })
@@ -62,13 +63,14 @@ onMounted(async () => {
 })
 
 function prevPage() {
-  if (page.value <= 1) return
-  page.value--
+  if (cursors.value.length <= 1) return
+  cursors.value = cursors.value.slice(0, -1)
   load()
 }
 function nextPage() {
-  if (page.value >= pages.value) return
-  page.value++
+  const last = rows.value[rows.value.length - 1]
+  if (!last || !hasMore.value) return
+  cursors.value = [...cursors.value, last.timestamp_ns]
   load()
 }
 </script>
@@ -91,7 +93,7 @@ function nextPage() {
           <option value="all">全部动作</option><option value="DROP">DROP</option><option value="PASS">PASS</option>
         </select>
         <div class="spacer"></div>
-        <span class="muted">第 {{ page }} / {{ pages }} 页</span>
+        <span class="muted">第 {{ pageNo }} 页 · 共 {{ total }} 条</span>
       </div>
       <div v-if="!rows.length && !q && action === 'all'" class="panel-note" style="border-top: 0">
         暂无采样记录：请在「系统设置 → 包日志」确认已启用，并将采样率调低（如 1/16）；仅 DROP 与防护项目 PASS 的流量会被采样。
@@ -128,8 +130,8 @@ function nextPage() {
       <div class="tfoot">
         <span>每页 {{ pageSize }} 条 · 共 {{ total }} 条 · 缓冲已用 {{ usage.entries }} 条</span>
         <div class="pager">
-          <button class="btn btn-sm" :disabled="page <= 1 || loading" @click="prevPage">上一页</button>
-          <button class="btn btn-sm" :disabled="page >= pages || loading" @click="nextPage">下一页</button>
+          <button class="btn btn-sm" :disabled="cursors.length <= 1 || loading" @click="prevPage">上一页</button>
+          <button class="btn btn-sm" :disabled="!hasMore || loading" @click="nextPage">下一页</button>
         </div>
       </div>
     </PanelCard>
