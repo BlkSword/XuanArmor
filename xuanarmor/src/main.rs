@@ -619,6 +619,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     // 告警检查任务
     let alert_handle = {
         let stats = state.stats.clone();
+        let alert = alert.clone();
         tokio::spawn(async move {
             let mut last_total = 0u64;
             let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -777,8 +778,10 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     let _map_entries_handle = {
         let stats = state.stats.clone();
         let ebpf = ebpf.clone();
+        let alert = alert.clone();
+        let map_infos = map_infos.clone();
         tokio::spawn(async move {
-            sync_map_entries(ebpf, stats, map_entries_interval_s).await;
+            sync_map_entries(ebpf, stats, map_entries_interval_s, alert, map_infos).await;
         })
     };
 
@@ -1316,12 +1319,15 @@ async fn sync_map_entries(
     ebpf: Arc<tokio::sync::Mutex<Ebpf>>,
     stats: Arc<crate::state::Stats>,
     interval_s: u64,
+    alert: Arc<AlertManager>,
+    map_infos: Arc<Vec<crate::web::MapInfo>>,
 ) {
     use xuanarmor_common::{
         BlockEntry, ConnTrackEntry, PortRateKey, ProjectPolicy, ProjectPolicyKey, RateCounter,
         TrustEntry,
     };
-    const CAP: usize = 20_000;
+    // 单表遍历上限与 /api/map-usage 的 sampled_cap 保持一致。
+    let cap: usize = crate::web::MAP_ENTRY_SAMPLE_CAP;
 
     let mut interval = tokio::time::interval(Duration::from_secs(interval_s.max(5)));
     loop {
@@ -1338,42 +1344,42 @@ async fn sync_map_entries(
         // 每张表的 key/value 类型不同，逐个分支统计；CAP 限制单表遍历成本。
         if let Some(map) = guard.map_mut("BLACKLIST") {
             if let Ok(m) = LruHashMap::<_, IpKey, BlockEntry>::try_from(map) {
-                sampled.push(("BLACKLIST", m.iter().take(CAP).count() as u64));
+                sampled.push(("BLACKLIST", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("RATE_MAP") {
             if let Ok(m) = LruHashMap::<_, IpKey, RateCounter>::try_from(map) {
-                sampled.push(("RATE_MAP", m.iter().take(CAP).count() as u64));
+                sampled.push(("RATE_MAP", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("PORT_RATE_MAP") {
             if let Ok(m) = LruHashMap::<_, PortRateKey, RateCounter>::try_from(map) {
-                sampled.push(("PORT_RATE_MAP", m.iter().take(CAP).count() as u64));
+                sampled.push(("PORT_RATE_MAP", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("TRUST_MAP") {
             if let Ok(m) = LruHashMap::<_, IpKey, TrustEntry>::try_from(map) {
-                sampled.push(("TRUST_MAP", m.iter().take(CAP).count() as u64));
+                sampled.push(("TRUST_MAP", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("CONN_TRACK") {
             if let Ok(m) = LruHashMap::<_, IpKey, ConnTrackEntry>::try_from(map) {
-                sampled.push(("CONN_TRACK", m.iter().take(CAP).count() as u64));
+                sampled.push(("CONN_TRACK", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("SYN_PROXY_CONN") {
             if let Ok(m) = LruHashMap::<_, IpKey, u64>::try_from(map) {
-                sampled.push(("SYN_PROXY_CONN", m.iter().take(CAP).count() as u64));
+                sampled.push(("SYN_PROXY_CONN", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("TOP_ATTACKERS") {
             if let Ok(m) = LruHashMap::<_, IpKey, u64>::try_from(map) {
-                sampled.push(("TOP_ATTACKERS", m.iter().take(CAP).count() as u64));
+                sampled.push(("TOP_ATTACKERS", m.iter().take(cap).count() as u64));
             }
         }
         if let Some(map) = guard.map_mut("PROJECT_POLICY") {
             if let Ok(m) = LruHashMap::<_, ProjectPolicyKey, ProjectPolicy>::try_from(map) {
-                sampled.push(("PROJECT_POLICY", m.iter().take(CAP).count() as u64));
+                sampled.push(("PROJECT_POLICY", m.iter().take(cap).count() as u64));
             }
         }
         drop(guard);
@@ -1384,6 +1390,25 @@ async fn sync_map_entries(
         stats
             .map_entries_updated_ns
             .store(crate::time::monotonic_ns(), Ordering::Relaxed);
+
+        // v0.5.4：map 水位告警（webhook + 通知通道）。
+        // 采样值受 cap 截断，因此这里是「至少」水位——达到阈值即告警，宁可早报。
+        let watermarks: Vec<crate::alert::MapWatermark> = map_infos
+            .iter()
+            .filter_map(|info| {
+                let entries = stats
+                    .map_entries
+                    .iter()
+                    .find(|e| *e.key() == info.name.as_str())
+                    .map(|e| *e.value())?;
+                Some(crate::alert::MapWatermark {
+                    name: info.name.clone(),
+                    entries,
+                    max_entries: info.max_entries,
+                })
+            })
+            .collect();
+        alert.check_map_usage(&watermarks).await;
     }
 }
 

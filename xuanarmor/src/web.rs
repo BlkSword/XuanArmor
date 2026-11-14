@@ -98,6 +98,81 @@ async fn body_size_limit(request: Request, next: Next) -> Response {
     next.run(request).await
 }
 
+/// 单次可压缩响应的体积上限：超过则跳过压缩，直接透传。
+const MAX_COMPRESS_BODY: usize = 32 * 1024 * 1024;
+/// 小于该体积的响应不值得压缩（TCP 头与 CPU 成本高于收益）。
+const MIN_COMPRESS_BODY: usize = 512;
+
+/// 响应压缩中间件：对 JSON / 纯文本响应做 gzip 协商压缩（v0.5.4）。
+///
+/// 控制台 24h 趋势图一次约 2.5 MB JSON，历史实现只对控制台 HTML 做 gzip，
+/// 所有 API 明文传输。这里对 >= 512B 的 `application/json`、`text/plain`
+/// 响应统一压缩（Prometheus `/metrics` 也受益）；SSE / HTML 走各自既有路径。
+/// 必须注册在最内层（最靠近 handler），先压缩再经过日志与认证中间件。
+async fn gzip_response(request: Request, next: Next) -> Response {
+    let wants_gzip = accepts_gzip(request.headers());
+    let response = next.run(request).await;
+    if !wants_gzip
+        || response.status() != StatusCode::OK
+        || response.headers().contains_key(header::CONTENT_ENCODING)
+    {
+        return response;
+    }
+    let compressible = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("application/json") || v.starts_with("text/plain"))
+        .unwrap_or(false);
+    if !compressible {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    // 审计 SSE/流式响应不会走到这里；其余 API 响应体积可控。
+    let bytes = match axum::body::to_bytes(body, MAX_COMPRESS_BODY).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!("failed to buffer response for gzip: {}", e);
+            return api_err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to buffer response",
+            );
+        }
+    };
+    if bytes.len() < MIN_COMPRESS_BODY {
+        return Response::from_parts(parts, Body::from(bytes));
+    }
+
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(
+        Vec::with_capacity(bytes.len() / 4),
+        flate2::Compression::default(),
+    );
+    if let Err(e) = encoder.write_all(&bytes) {
+        tracing::warn!("failed to gzip response: {}", e);
+        return Response::from_parts(parts, Body::from(bytes));
+    }
+    let compressed = match encoder.finish() {
+        Ok(compressed) => compressed,
+        Err(e) => {
+            tracing::warn!("failed to gzip response: {}", e);
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+    };
+
+    parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.insert(
+        header::CONTENT_ENCODING,
+        axum::http::HeaderValue::from_static("gzip"),
+    );
+    parts.headers.append(
+        header::VARY,
+        axum::http::HeaderValue::from_static("accept-encoding"),
+    );
+    Response::from_parts(parts, Body::from(compressed))
+}
+
 fn map_data(map: &aya::maps::Map) -> Option<&aya::maps::MapData> {
     use aya::maps::Map;
     match map {
@@ -129,6 +204,13 @@ pub struct MapInfo {
     pub map_type: String,
     pub max_entries: u64,
 }
+
+/// 后台采样单张 map 条目数的遍历上限（v0.5.4 从 main.rs 提到这里共用）。
+///
+/// 遍历百万级 LRU Hash 会长时间持锁并阻塞事件消费，因此单表最多数这么多条；
+/// 超过该值的一律按 `MAP_ENTRY_SAMPLE_CAP` 上报（控制台显示为 `20000+`），
+/// 水位使用率因此是「至少」值。
+pub const MAP_ENTRY_SAMPLE_CAP: usize = 20_000;
 
 /// 启动时采集全部 map 的静态元信息。
 pub fn collect_map_infos(ebpf: &aya::Ebpf) -> Vec<MapInfo> {
@@ -265,6 +347,8 @@ pub async fn run(
         .route("/api/hub/proxy/policies", get(hub_proxy_policies_handler))
         .route("/metrics", get(metrics_handler))
         .merge(crate::apictl::router())
+        // gzip 必须在最内层：先压缩响应体，再交给日志与认证中间件。
+        .layer(middleware::from_fn(gzip_response))
         .layer(middleware::from_fn(body_size_limit))
         .layer(middleware::from_fn(request_logger))
         .layer(middleware::from_fn_with_state(
@@ -576,6 +660,8 @@ async fn map_usage_handler(State(state): State<Arc<WebState>>) -> Json<serde_jso
     Json(serde_json::json!({
         "maps": items,
         "warn_threshold": 0.8,
+        // 单表采样遍历上限：entries == sampled_cap 时真实值可能更大（显示 20000+）
+        "sampled_cap": MAP_ENTRY_SAMPLE_CAP,
         "sampled_ns": state.stats.map_entries_updated_ns.load(Ordering::Relaxed),
     }))
 }
@@ -870,12 +956,50 @@ fn block_origin_label(rule_id: u16) -> &'static str {
     }
 }
 
+/// 黑名单列表查询参数（v0.5.4）。
+///
+/// BLACKLIST 上限 10 万条，历史实现全量返回（最多约 14 MB JSON）+ 前端全量渲染，
+/// 极端流量下会把控制台拖死。这里改为服务端过滤 + 分页，默认每页 200 条。
+#[derive(Deserialize)]
+struct BlacklistQuery {
+    #[serde(default = "default_blacklist_limit")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+    /// IP 子串过滤
+    #[serde(default)]
+    q: Option<String>,
+    /// 封禁原因（中文标签，与返回的 reason 字段一致）
+    #[serde(default)]
+    reason: Option<String>,
+    /// 来源（api / adaptive / config / policy / data）
+    #[serde(default)]
+    origin: Option<String>,
+}
+
+fn default_blacklist_limit() -> usize {
+    200
+}
+
 /// 列出 BLACKLIST map 中仍有效的条目（数据面动态封禁与 API/Hub 封禁）。
+///
+/// 服务端过滤 + 分页：`{entries, count, total, limit, offset}`。
+/// `total` 是过滤后的总条数，`count` 是本次返回条数（保持旧字段兼容）。
 async fn list_blacklist_handler(
     State(state): State<Arc<WebState>>,
+    Query(q): Query<BlacklistQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let now_ns = crate::time::monotonic_ns();
-    let entries = {
+    let limit = q.limit.clamp(1, 2000);
+    let offset = q.offset.min(1_000_000);
+    let ip_needle =
+        q.q.as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
+    let reason_filter = q.reason.as_deref().filter(|s| !s.is_empty());
+    let origin_filter = q.origin.as_deref().filter(|s| !s.is_empty());
+
+    let (matched, total) = {
         let mut guard = state.control.ebpf.lock().await;
         let blacklist: LruHashMap<_, IpKey, BlockEntry> = guard
             .map_mut("BLACKLIST")
@@ -884,20 +1008,43 @@ async fn list_blacklist_handler(
             .map_err(|e: aya::maps::MapError| {
                 api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
             })?;
-        blacklist
-            .iter()
-            .flatten()
-            .filter(|(_, e)| {
-                e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT
-                    || e.blocked_until_ns > now_ns
-            })
-            .map(|(key, e)| {
-                let reason = e.block_reason as u16;
-                let last_reason = e.last_reason as u16;
+
+        // (排序键, IP 字符串, 展示用 JSON)：先按 created_ns 倒序，同时间按 IP，
+        // 保证翻页顺序稳定（LRU map 的遍历顺序不稳定）。
+        let mut rows: Vec<(u64, String, serde_json::Value)> = Vec::new();
+        for (key, e) in blacklist.iter().flatten() {
+            if !(e.blocked_until_ns == xuanarmor_common::BLOCK_PERMANENT
+                || e.blocked_until_ns > now_ns)
+            {
+                continue;
+            }
+            let ip = format_ip_key(&key);
+            if let Some(needle) = &ip_needle {
+                if !ip.to_lowercase().contains(needle) {
+                    continue;
+                }
+            }
+            let reason = e.block_reason as u16;
+            let reason_label = rule_display_name(reason);
+            if let Some(want) = reason_filter {
+                if reason_label != want {
+                    continue;
+                }
+            }
+            let origin_label = block_origin_label(reason);
+            if let Some(want) = origin_filter {
+                if origin_label != want {
+                    continue;
+                }
+            }
+            let last_reason = e.last_reason as u16;
+            rows.push((
+                e.first_seen_ns,
+                ip.clone(),
                 serde_json::json!({
-                    "ip": crate::ip::format_ip_key(&key),
-                    "reason": rule_display_name(reason),
-                    "origin": block_origin_label(reason),
+                    "ip": ip,
+                    "reason": reason_label,
+                    "origin": origin_label,
                     // 叠加原因：首次触发后，其它模块（自适应/威胁情报等）再命中的原因。
                     // 空字符串表示没有叠加，便于控制台区分「只触发一次」和「多模块命中」。
                     "last_reason": if last_reason != 0 && last_reason != reason {
@@ -912,13 +1059,25 @@ async fn list_blacklist_handler(
                         e.blocked_until_ns
                     },
                     "hits": e.hit_count,
-                })
-            })
-            .collect::<Vec<_>>()
+                }),
+            ));
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        let total = rows.len();
+        let page = rows
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(_, _, value)| value)
+            .collect::<Vec<_>>();
+        (page, total)
     };
     Ok(Json(serde_json::json!({
-        "entries": entries,
-        "count": entries.len(),
+        "entries": matched,
+        "count": matched.len(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     })))
 }
 
@@ -1003,6 +1162,9 @@ struct AuditQuery {
     ip: Option<String>,
     #[serde(default)]
     action: Option<String>,
+    /// 操作者过滤（控制台「全部来源」下拉）
+    #[serde(default)]
+    actor: Option<String>,
     #[serde(default)]
     from: Option<String>,
     #[serde(default)]
@@ -1013,10 +1175,16 @@ fn default_audit_limit() -> usize {
     100
 }
 
+/// 审计查询单页上限（v0.5.4）：历史实现未 clamp，外部可一次拉满 1 万条。
+const MAX_AUDIT_LIMIT: usize = 1000;
+
 #[derive(Deserialize)]
 struct SeriesQuery {
     #[serde(default = "default_series_duration")]
     duration_s: u64,
+    /// 期望返回的最大点数（0 = 不降采样）；缺省按 duration_s 自动选择。
+    #[serde(default)]
+    points: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -1028,6 +1196,64 @@ struct AttackerSeriesQuery {
 
 fn default_series_duration() -> u64 {
     3600
+}
+
+/// 趋势图默认降采样目标点数（v0.5.4）：
+/// 15m 保持 10s 原始粒度（最多 90 点），1h 压到 360 点（10s→10s 仍原始粒度），
+/// 24h 压到 720 点（120s 粒度），避免一次返回 8640 点、约 2.5 MB JSON。
+fn default_series_points(duration_s: u64) -> usize {
+    if duration_s <= 900 {
+        0
+    } else if duration_s <= 3600 {
+        360
+    } else {
+        720
+    }
+}
+
+fn max_opt(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
+}
+
+/// 按时长等分桶降采样时序点（v0.5.4）。
+///
+/// 累计计数（*_blocked）取桶内最后一个值（单调递增，最后值即累计），
+/// 速率字段（pps/dps）取桶内最大值以保留峰值，`has_data` 取桶内任意。
+fn downsample_series(
+    points: Vec<crate::timeseries::MetricPoint>,
+    max_points: usize,
+) -> Vec<crate::timeseries::MetricPoint> {
+    if max_points == 0 || points.len() <= max_points {
+        return points;
+    }
+    let bucket = points.len().div_ceil(max_points);
+    let mut out = Vec::with_capacity(max_points.min(points.len()));
+    let mut idx = 0;
+    while idx < points.len() {
+        let end = (idx + bucket).min(points.len());
+        let slice = &points[idx..end];
+        let mut acc = slice[slice.len() - 1].clone();
+        let (mut pps_max, mut dps_max) = (None, None);
+        let mut has_data = false;
+        for p in slice {
+            pps_max = max_opt(pps_max, p.pps);
+            dps_max = max_opt(dps_max, p.dps);
+            has_data |= p.has_data;
+        }
+        acc.pps = pps_max;
+        acc.dps = dps_max;
+        acc.pps_max = pps_max;
+        acc.dps_max = dps_max;
+        acc.has_data = has_data;
+        out.push(acc);
+        idx = end;
+    }
+    out
 }
 
 /// 趋势图用精简数据点：只保留 Dashboard 趋势图实际消费的字段，
@@ -1072,7 +1298,16 @@ async fn metrics_series_handler(
     State(state): State<Arc<WebState>>,
     Query(q): Query<SeriesQuery>,
 ) -> Json<serde_json::Value> {
-    let series = state.stats.timeseries.read().await.snapshot(q.duration_s);
+    // duration_s 受窗口容量（8640 点）天然约束，这里只做防御性上限。
+    let duration_s = q.duration_s.min(86_400 * 7);
+    let series = state.stats.timeseries.read().await.snapshot(duration_s);
+    // v0.5.4：按时间范围降采样，避免 24h 视图一次返回 8640 点（约 2.5 MB）。
+    let max_points = q
+        .points
+        .map(|p| p.min(2000))
+        .unwrap_or_else(|| default_series_points(duration_s));
+    let raw_len = series.len();
+    let series = downsample_series(series, max_points);
     // 时序点内部使用单调秒；额外返回 wall-clock 纳秒，前端无需自行换算。
     let offset_ns = wall_clock_offset_ns();
     let slim: Vec<serde_json::Value> = series
@@ -1091,7 +1326,12 @@ async fn metrics_series_handler(
             value
         })
         .collect();
-    Json(serde_json::json!({ "series": slim }))
+    let point_count = slim.len();
+    Json(serde_json::json!({
+        "series": slim,
+        "points": point_count,
+        "downsampled": point_count < raw_len,
+    }))
 }
 
 async fn list_port_acl_handler(State(state): State<Arc<WebState>>) -> Json<serde_json::Value> {
@@ -1293,6 +1533,8 @@ async fn audit_handler(
     State(state): State<Arc<WebState>>,
     axum::extract::Query(q): axum::extract::Query<AuditQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let limit = q.limit.clamp(1, MAX_AUDIT_LIMIT);
+    let offset = q.offset.min(10_000);
     let entries = state
         .auditor
         .list(10_000)
@@ -1302,15 +1544,23 @@ async fn audit_handler(
     let filter_text = q.filter.as_deref().map(|s| s.to_lowercase());
     let ip_filter = q.ip.as_deref().map(|s| s.to_lowercase());
     let action_filter = q.action.as_deref().map(|s| s.to_lowercase());
+    let actor_filter = q.actor.as_deref().filter(|s| !s.is_empty());
 
     let filtered: Vec<_> = entries
         .into_iter()
         .filter(|e| {
+            if let Some(want) = actor_filter {
+                if e.actor != want {
+                    return false;
+                }
+            }
             if let Some(ft) = &filter_text {
+                // v0.5.4：搜索范围补上 source_ip，控制台顶部搜索框可搜来源地址。
                 let hay = format!(
-                    "{} {} {} {}",
+                    "{} {} {} {} {}",
                     e.timestamp,
                     e.actor,
+                    e.source_ip.as_deref().unwrap_or(""),
                     serde_json::to_string(&e.action).unwrap_or_default(),
                     serde_json::to_string(&e.detail).unwrap_or_default()
                 )
@@ -1359,13 +1609,17 @@ async fn audit_handler(
     let paged: Vec<_> = filtered
         .into_iter()
         .rev()
-        .skip(q.offset)
-        .take(q.limit)
+        .skip(offset)
+        .take(limit)
         .collect();
 
-    Ok(Json(
-        serde_json::json!({ "entries": paged, "total": total }),
-    ))
+    Ok(Json(serde_json::json!({
+        "entries": paged,
+        "count": paged.len(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    })))
 }
 
 async fn audit_stream_handler(
@@ -1394,6 +1648,9 @@ struct PacketQuery {
     action: Option<u8>,
     #[serde(default)]
     rule: Option<u16>,
+    /// 分页偏移（v0.5.4，控制台服务端翻页）
+    #[serde(default)]
+    offset: usize,
     #[serde(default = "default_packet_limit")]
     limit: usize,
 }
@@ -1402,13 +1659,15 @@ fn default_packet_limit() -> usize {
     100
 }
 
-/// 查询采样包日志。
+/// 查询采样包日志（v0.5.4 支持服务端分页）。
 ///
 /// 采样时间戳来自 eBPF 单调时钟，统一转换为 wall-clock 纳秒后返回。
 async fn packets_handler(
     State(state): State<Arc<WebState>>,
     axum::extract::Query(q): axum::extract::Query<PacketQuery>,
 ) -> Json<serde_json::Value> {
+    let limit = q.limit.clamp(1, 1000);
+    let offset = q.offset.min(1_000_000);
     let query = PacketLogQuery {
         ip: q.ip,
         port: q.port,
@@ -1417,17 +1676,21 @@ async fn packets_handler(
         rule: q.rule,
         from_ns: None,
         to_ns: None,
-        limit: q.limit.min(1000),
+        offset,
+        limit,
     };
     let offset_ns = wall_clock_offset_ns();
     let (packet_log_entries, packet_log_bytes) = state.packet_log.usage();
-    let mut entries = state.packet_log.query(&query);
+    let (mut entries, total) = state.packet_log.query_page(&query);
     for e in &mut entries {
         e.timestamp_ns = monotonic_to_wall_ns(e.timestamp_ns, offset_ns);
     }
     Json(serde_json::json!({
         "entries": entries,
         "count": entries.len(),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
         "usage": {
             "entries": packet_log_entries,
             "bytes": packet_log_bytes,
@@ -1511,6 +1774,7 @@ async fn ip_detail_handler(
         rule: None,
         from_ns: None,
         to_ns: None,
+        offset: 0,
         limit: 100,
     });
     let offset_ns = wall_clock_offset_ns();
@@ -1584,6 +1848,7 @@ async fn ip_series_handler(
         rule: None,
         from_ns: Some(from_ns),
         to_ns: None,
+        offset: 0,
         limit: 10000,
     });
 
@@ -1626,47 +1891,101 @@ async fn ip_series_handler(
     Ok(Json(serde_json::json!({ "ip": q.ip, "series": points })))
 }
 
-/// 返回最近攻击事件（DROP 事件流）。
+/// 攻击事件查询参数（v0.5.4：服务端分页 + 过滤）。
+#[derive(Deserialize)]
+struct AttackEventsQuery {
+    #[serde(default = "default_attack_events_limit")]
+    limit: usize,
+    #[serde(default)]
+    offset: usize,
+    /// 匹配源 IP / 命中规则名
+    #[serde(default)]
+    q: Option<String>,
+    /// 协议号（6=TCP / 17=UDP / 1=ICMP / 58=ICMPv6）
+    #[serde(default)]
+    protocol: Option<u8>,
+}
+
+fn default_attack_events_limit() -> usize {
+    50
+}
+
+/// 攻击事件环形缓冲容量：与 `Stats::push_attack_events` 的 1000 条保持一致。
+const ATTACK_EVENT_WINDOW: usize = 1000;
+/// 攻击事件单页上限（防止一次拉走整个窗口）。
+const MAX_ATTACK_EVENT_LIMIT: usize = 200;
+
+/// 返回最近攻击事件（DROP 事件流，v0.5.4 服务端分页）。
 ///
-/// `DropEvent.timestamp_ns` 来自 eBPF 单调时钟（`bpf_ktime_get_ns`），
-/// 这里统一转换为 wall-clock 纳秒，前端可直接 `new Date(ts / 1e6)` 展示。
+/// `DropEvent` 是数据面的精简结构（源 IP / 协议 / 规则 / 目的端口），
+/// 不含目的 IP、包长等字段；返回体只暴露真实存在的维度，避免前端展示失真。
+/// 响应：`{events, count, total, window, truncated}`，`total` 为窗口内过滤后总数。
 async fn attack_events_handler(
     State(state): State<Arc<WebState>>,
-    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
+    axum::extract::Query(q): axum::extract::Query<AttackEventsQuery>,
 ) -> Json<serde_json::Value> {
     // 单调时钟 → wall-clock 偏移，与 /api/ip-series 的换算方式保持一致。
     let offset_ns = wall_clock_offset_ns();
+    let limit = q.limit.clamp(1, MAX_ATTACK_EVENT_LIMIT);
+    let offset = q.offset.min(ATTACK_EVENT_WINDOW);
+    let needle =
+        q.q.as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
 
-    let events: Vec<serde_json::Value> = state
-        .stats
-        .attack_events(q.limit.min(200))
-        .into_iter()
-        .map(|e| {
-            let src_ip = match xuanarmor_common::IpFamily::from_u8(e.family) {
-                Some(xuanarmor_common::IpFamily::Ipv4) => {
-                    let octets = [e.src_ip[12], e.src_ip[13], e.src_ip[14], e.src_ip[15]];
-                    format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3])
-                }
-                Some(xuanarmor_common::IpFamily::Ipv6) => {
-                    crate::ip::format_ip_key(&xuanarmor_common::IpKey::from_ipv6(e.src_ip))
-                }
-                None => "unknown".to_string(),
-            };
-            let rule_name = rule_display_name(e.rule_id);
-            serde_json::json!({
-                "timestamp_ns": monotonic_to_wall_ns(e.timestamp_ns, offset_ns),
-                "src_ip": src_ip,
-                "protocol": e.protocol,
-                "rule_id": e.rule_id,
-                "rule_name": rule_name,
-                "dst_port": e.dst_port,
-            })
-        })
-        .collect();
+    // 窗口内事件按「新 → 旧」返回；同时给出全局单调序号，前端可用作稳定 id。
+    let window = state.stats.attack_events(ATTACK_EVENT_WINDOW);
+    let latest_seq = state.stats.attack_seq();
+
+    let mut matched: Vec<serde_json::Value> = Vec::new();
+    for (i, e) in window.iter().enumerate() {
+        let src_ip = match xuanarmor_common::IpFamily::from_u8(e.family) {
+            Some(xuanarmor_common::IpFamily::Ipv4) => {
+                let octets = [e.src_ip[12], e.src_ip[13], e.src_ip[14], e.src_ip[15]];
+                format!("{}.{}.{}.{}", octets[0], octets[1], octets[2], octets[3])
+            }
+            Some(xuanarmor_common::IpFamily::Ipv6) => {
+                crate::ip::format_ip_key(&xuanarmor_common::IpKey::from_ipv6(e.src_ip))
+            }
+            None => "unknown".to_string(),
+        };
+        let rule_name = rule_display_name(e.rule_id);
+        if let Some(proto) = q.protocol {
+            if e.protocol != proto {
+                continue;
+            }
+        }
+        if let Some(needle) = &needle {
+            let hay = format!("{} {} {}", src_ip, rule_name, e.rule_id).to_lowercase();
+            if !hay.contains(needle) {
+                continue;
+            }
+        }
+        matched.push(serde_json::json!({
+            // 全局单调序号：跨页稳定，可作前端列表 key
+            "seq": latest_seq.saturating_sub(i as u64),
+            "timestamp_ns": monotonic_to_wall_ns(e.timestamp_ns, offset_ns),
+            "src_ip": src_ip,
+            "protocol": e.protocol,
+            "rule_id": e.rule_id,
+            "rule_name": rule_name,
+            "dst_port": e.dst_port,
+            // Ring Buffer 只上报 DROP 事件
+            "action": "DROP",
+        }));
+    }
+
+    let total = matched.len();
+    let events: Vec<serde_json::Value> = matched.into_iter().skip(offset).take(limit).collect();
 
     Json(serde_json::json!({
         "events": events,
         "count": events.len(),
+        "total": total,
+        "window": ATTACK_EVENT_WINDOW,
+        "truncated": total > events.len(),
+        "limit": limit,
+        "offset": offset,
     }))
 }
 

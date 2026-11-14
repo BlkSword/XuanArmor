@@ -47,7 +47,22 @@ pub struct AlertManager {
     config: AlertConfig,
     client: reqwest::Client,
     last_alert_s: Mutex<u64>,
+    /// map 水位告警独立冷却时间戳（v0.5.4），与 DPS 告警互不影响。
+    last_map_alert_s: Mutex<u64>,
     notifier: std::sync::Mutex<Option<Arc<crate::notify::NotifyState>>>,
+}
+
+/// eBPF map 水位告警阈值（v0.5.4）：使用率达到该值即告警。
+pub const MAP_USAGE_WARN_THRESHOLD: f64 = 0.8;
+/// map 水位告警最小间隔（秒）：持续高水位时每 30 分钟最多告警一次。
+const MAP_USAGE_ALERT_COOLDOWN_S: u64 = 1800;
+
+/// 单张 map 的水位采样项，由 `sync_map_entries` 后台任务在采样后传入。
+#[derive(Clone, Debug)]
+pub struct MapWatermark {
+    pub name: String,
+    pub entries: u64,
+    pub max_entries: u64,
 }
 
 impl AlertManager {
@@ -56,6 +71,7 @@ impl AlertManager {
             config,
             client: reqwest::Client::new(),
             last_alert_s: Mutex::new(0),
+            last_map_alert_s: Mutex::new(0),
             notifier: std::sync::Mutex::new(None),
         })
     }
@@ -169,6 +185,84 @@ impl AlertManager {
             });
             tokio::spawn(async move {
                 notifier.send_attack_alert(payload).await;
+            });
+        }
+    }
+
+    /// 检查 eBPF map 水位并在超阈值时告警（v0.5.4）。
+    ///
+    /// 由 `sync_map_entries` 后台任务在每次采样后调用（`metrics_interval_s` 周期），
+    /// 请求路径不触发；告警按 [`MAP_USAGE_ALERT_COOLDOWN_S`] 限频，避免持续
+    /// 高水位刷屏。webhook 与通知通道（邮件）同时投递，与 DPS 告警互不抑制。
+    pub async fn check_map_usage(&self, maps: &[MapWatermark]) {
+        let over: Vec<&MapWatermark> = maps
+            .iter()
+            .filter(|m| {
+                m.max_entries > 0
+                    && (m.entries as f64 / m.max_entries as f64) >= MAP_USAGE_WARN_THRESHOLD
+            })
+            .collect();
+        if over.is_empty() {
+            return;
+        }
+
+        let now = now_s();
+        let mut last = self.last_map_alert_s.lock().await;
+        if now.saturating_sub(*last) < MAP_USAGE_ALERT_COOLDOWN_S {
+            return;
+        }
+        *last = now;
+        drop(last);
+
+        let summary = over
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}({:.0}%: {}/{})",
+                    m.name,
+                    m.entries as f64 / m.max_entries as f64 * 100.0,
+                    m.entries,
+                    m.max_entries
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let message = format!(
+            "XuanArmor [{}] 告警：eBPF map 水位超过 {:.0}%：{}",
+            self.config.interface,
+            MAP_USAGE_WARN_THRESHOLD * 100.0,
+            summary
+        );
+        let payload = serde_json::json!({
+            "event": "map_usage",
+            "interface": self.config.interface,
+            "warn_threshold": MAP_USAGE_WARN_THRESHOLD,
+            "message": message,
+            "maps": over
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "name": m.name,
+                        "entries": m.entries,
+                        "max": m.max_entries,
+                        "ratio": m.entries as f64 / m.max_entries as f64,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "timestamp": now,
+        });
+
+        if let Some(url) = &self.config.webhook_url {
+            // 通用 JSON 载荷，兼容自定义接收端（不套用攻击告警的 slack/dingtalk 模板）。
+            if let Err(e) = self.client.post(url).json(&payload).send().await {
+                tracing::warn!("failed to send map usage webhook: {}", e);
+            }
+        }
+
+        let notifier = self.notifier.lock().ok().and_then(|g| g.clone());
+        if let Some(notifier) = notifier {
+            tokio::spawn(async move {
+                notifier.send_system_alert("map_usage", payload).await;
             });
         }
     }

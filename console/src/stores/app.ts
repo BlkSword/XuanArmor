@@ -1,6 +1,6 @@
 import { computed, reactive, ref } from 'vue'
 import { api, demoMode as clientDemoMode, getToken, setToken } from '../api/client'
-import type { Role, SeriesPoint, Stats } from '../api/types'
+import type { AuditEntry, Role, SeriesPoint, Stats } from '../api/types'
 
 export const demoMode = () => clientDemoMode()
 
@@ -75,6 +75,22 @@ export function toast(title: string, desc = '', kind: 'ok' | 'warn' | 'danger' |
     const i = toasts.findIndex((t) => t.id === id)
     if (i >= 0) toasts.splice(i, 1)
   }, 3600)
+}
+
+/**
+ * 审计 SSE 实时记录（v0.5.4）。
+ *
+ * 历史实现只建立了 `/api/audit/stream` 连接却没有消费消息，
+ * 审计页的「SSE 推送」标记名不副实。这里把收到的记录缓存到全局 store，
+ * 审计页顶部提示「收到 N 条新记录」，由用户决定何时刷新（避免分页错位）。
+ */
+export const liveAudit = reactive<{ items: AuditEntry[] }>({ items: [] })
+export function pushLiveAudit(entry: AuditEntry) {
+  liveAudit.items.unshift(entry)
+  if (liveAudit.items.length > 50) liveAudit.items.pop()
+}
+export function clearLiveAudit() {
+  liveAudit.items.splice(0)
 }
 
 export async function refresh(force = false) {

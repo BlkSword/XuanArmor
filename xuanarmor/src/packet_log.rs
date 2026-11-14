@@ -93,6 +93,9 @@ pub struct PacketLogQuery {
     pub rule: Option<u16>,
     pub from_ns: Option<u64>,
     pub to_ns: Option<u64>,
+    /// 分页偏移（v0.5.4，控制台服务端翻页）
+    #[serde(default)]
+    pub offset: usize,
     #[serde(default = "default_limit")]
     pub limit: usize,
 }
@@ -154,8 +157,9 @@ impl PacketLog {
         )
     }
 
-    pub fn query(&self, opts: &PacketLogQuery) -> Vec<PacketSampleEntry> {
-        // 先在锁内做一次快照，释放锁后再做过滤与格式化，避免阻塞采样写入。
+    /// 按条件过滤后的快照（新→旧）。锁内只做拷贝，过滤/格式化在锁外完成，
+    /// 避免阻塞 Ring Buffer 采样写入。
+    fn filtered_snapshot(&self, opts: &PacketLogQuery) -> Vec<PacketSample> {
         let snapshot: Vec<PacketSample> = {
             let entries = self.entries.lock().unwrap();
             entries.iter().rev().copied().collect()
@@ -203,9 +207,29 @@ impl PacketLog {
                 }
                 true
             })
+            .collect()
+    }
+
+    pub fn query(&self, opts: &PacketLogQuery) -> Vec<PacketSampleEntry> {
+        self.filtered_snapshot(opts)
+            .into_iter()
+            .skip(opts.offset)
             .take(opts.limit)
             .map(Into::into)
             .collect()
+    }
+
+    /// 分页查询：返回（当前页条目, 过滤后总条数），供控制台服务端翻页（v0.5.4）。
+    pub fn query_page(&self, opts: &PacketLogQuery) -> (Vec<PacketSampleEntry>, usize) {
+        let filtered = self.filtered_snapshot(opts);
+        let total = filtered.len();
+        let page = filtered
+            .into_iter()
+            .skip(opts.offset)
+            .take(opts.limit)
+            .map(Into::into)
+            .collect();
+        (page, total)
     }
 
     /// 返回最新的 n 条采样（保留给未来 CLI / 快速预览使用）。

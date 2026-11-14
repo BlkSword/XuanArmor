@@ -283,10 +283,10 @@ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8720/api/audit/verify | 
 - 早期版本（v0.5.0 之前）写入的旧记录没有 hash 字段，校验时会跳过并重新起链，
   这类历史片段无法追溯校验。
 
-## 可观测性：map 水位与告警（v0.5.0）
+## 可观测性：map 水位与告警（v0.5.0；内置告警 v0.5.4）
 
 `eBPF map` 使用 LRU 策略：写入超过容量后会淘汰旧条目（黑名单/信誉被挤掉，防护效果下降）。
-v0.5.0 新增水位观测：
+v0.5.0 新增水位观测，v0.5.4 起内置告警：
 
 ```bash
 # 每个 map 的条目数/上限/使用率（0.8 为告警阈值）
@@ -300,12 +300,18 @@ curl -s -H "Authorization: Bearer $TOKEN" http://<host>:8720/api/map-usage | jq
     {"name": "RATE_MAP", "type": "LruHashMap", "entries": 18100, "max": 100000, "ratio": 0.181}
   ],
   "warn_threshold": 0.8,
+  "sampled_cap": 20000,
   "sampled_ns": 1761234567890000000
 }
 ```
 
 - 数据来自后台采样缓存（`metrics_interval_s`，默认 30s），不是实时遍历；
+- 单表最多采样 `sampled_cap`（20000）条：`entries == sampled_cap` 时真实值可能更大，
+  水位是「至少」值，控制台显示为 `20000+`；
 - Array/RingBuf/LPM 表没有条目数采样，`entries` 固定为 0，水位无意义；
+- **内置告警（v0.5.4）**：采样任务发现任一表使用率 ≥ 0.8 时，按 30 分钟冷却向
+  顶层配置 `alert_webhook_url`（通用 JSON 载荷，`event=map_usage`）与通知通道
+  （`notify.json` 中的 SMTP 邮件）推送，与 DPS 告警互不抑制；
 - Prometheus 侧：`xuanarmor_map_usage_ratio{name="..."}`、`xuanarmor_map_entries{...}`、
   `xuanarmor_map_max_entries{...}`。
 

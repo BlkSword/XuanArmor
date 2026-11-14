@@ -142,12 +142,12 @@ export function makePacketSamples(n = 80): PacketSample[] {
     id: `pkt-${String(i).padStart(6, '0')}`,
     timestamp_ns: e.timestamp_ns,
     src_ip: e.src_ip,
-    dst_ip: e.dst_ip,
-    src_port: e.src_port,
+    dst_ip: e.dst_ip ?? '',
+    src_port: e.src_port ?? 0,
     dst_port: e.dst_port,
     protocol: e.protocol,
     action: e.action,
-    length: e.length,
+    length: e.length ?? 0,
     tcp_flags: e.protocol === 'TCP' ? ['SYN', 'SYN ACK', 'ACK', 'PSH ACK', 'RST'][i % 5] : undefined,
     payload_preview:
       e.protocol === 'TCP' && i % 3 === 0

@@ -1,6 +1,20 @@
 > # XuanArmor REST API 参考
 
-> 版本：v0.5.0（2026-10-31）
+> 版本：v0.5.0（2026-10-31），v0.5.4 增量见下
+
+> **v0.5.4（未发布）变更摘要 —— 控制台大数量统计治理**：
+> - 所有 JSON / 纯文本响应支持 `Accept-Encoding: gzip` 协商压缩（此前仅控制台 HTML 压缩）；
+> - `GET /api/metrics/series` 默认按时长降采样（15m 原始 10s 粒度、1h 360 点、24h 720 点即 120s 粒度），
+>   响应新增 `points` / `downsampled`，可用 `points` 参数覆盖；
+> - `GET /api/blacklist` 改为服务端过滤 + 分页（`limit` 默认 200、上限 2000；`offset`/`q`/`reason`/`origin`），
+>   响应新增 `total`；此前为全量返回（10 万条约 14 MB JSON）；
+> - `GET /api/attack-events` 改为服务端分页（`limit` 默认 50、上限 200；`offset`/`q`/`protocol`），
+>   响应新增 `total`/`window`/`truncated` 与稳定 `seq` 字段；**不再返回** `dst_ip`/`length` 等
+>   数据面 `DropEvent` 中并不存在的字段；
+> - `GET /api/packets` 新增 `offset` 与 `total`；`GET /api/audit` 的 `limit` 收紧到 1..1000、
+>   新增 `actor` 过滤，`filter` 搜索范围包含来源 IP；
+> - `GET /api/map-usage` 新增 `sampled_cap`（单表采样遍历上限 20000，`entries` 达到该值时真实值可能更大）；
+> - eBPF map 水位 ≥ 80% 时通过 webhook 与通知通道（邮件）告警，冷却 30 分钟。
 
 > **v0.5.0 变更摘要**：
 > - 新增 `GET /api/map-usage`（map 水位）与 `GET /api/audit/verify`（审计哈希链校验）；
@@ -54,19 +68,19 @@ Authorization: Bearer <token>
 | `/api/auth/reset-token` | POST | 重置访问令牌 |
 | `/` | GET | Web Dashboard（Vue 3 单文件 SPA，`console/` 构建后嵌入 `xuanarmor/web/app.html`） |
 | `/api/stats` | GET | 运行统计 |
-| `/api/attack-events` | GET | 攻击事件（DROP），`timestamp_ns` 为 wall-clock Unix 纳秒 |
-| `/api/packets` | GET | 采样包日志，`timestamp_ns` 为 wall-clock Unix 纳秒 |
+| `/api/attack-events` | GET | 攻击事件（DROP），**v0.5.4** 服务端分页（`limit`/`offset`/`q`/`protocol`），`timestamp_ns` 为 wall-clock Unix 纳秒 |
+| `/api/packets` | GET | 采样包日志，**v0.5.4** 服务端分页（`limit`/`offset`/`ip`/`action`），`timestamp_ns` 为 wall-clock Unix 纳秒 |
 | `/api/config` | GET, PATCH | 读取/修改运行时配置 |
 | `/api/config/reload` | POST | 从文件重新加载配置 |
 | `/api/protection-modules` | GET | 防护模块列表与状态 |
-| `/api/blacklist` | GET, POST, DELETE | 查询实时黑名单 / 封禁 / 解封 IP |
+| `/api/blacklist` | GET, POST, DELETE | 查询实时黑名单（**v0.5.4** 分页/过滤）/ 封禁 / 解封 IP |
 | `/api/whitelist` | GET, POST, DELETE | 查询 / 添加 / 移除 CIDR 白名单 |
-| `/api/audit` | GET | 审计日志 |
+| `/api/audit` | GET | 审计日志（**v0.5.4** `limit` ≤1000、`offset`、`filter`/`actor`） |
 | `/api/audit/stream` | GET | 审计日志 SSE |
 | `/api/audit/verify` | GET | **v0.5.0**：审计文件哈希链校验 |
-| `/api/metrics/series` | GET | 时序指标（附 wall-clock `timestamp_ns`，参数 `duration_s`） |
-| `/api/metrics/attacker-series` | GET | 单 IP 时序 |
-| `/api/map-usage` | GET | **v0.5.0**：eBPF map 条目数/上限/使用率 |
+| `/api/metrics/series` | GET | 时序指标（**v0.5.4** 默认降采样；参数 `duration_s`、`points`；附 wall-clock `timestamp_ns`） |
+| `/api/metrics/attacker-series` | GET | 单 IP 时序（**v0.5.4** 起仅 Top 20 攻击源有非零曲线） |
+| `/api/map-usage` | GET | **v0.5.0**：eBPF map 条目数/上限/使用率（**v0.5.4** 新增 `sampled_cap`） |
 | `/api/ip-detail` | GET | 单 IP 详情（控制台 IP 抽屉） |
 | `/api/ip-series` | GET | 单 IP 时序（控制台 IP 抽屉） |
 | `/api/port-acl` | GET, POST | 端口 ACL |
@@ -271,6 +285,64 @@ v0.5.0 可写字段：
 {"role": "readonly"}
 ```
 
+### GET /api/attack-events（v0.5.4 服务端分页）
+
+返回攻击事件环形缓冲（服务端保留最近 1000 条）中的 DROP 事件。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `limit` | 50 | 每页条数，上限 200 |
+| `offset` | 0 | 分页偏移（至多到窗口容量） |
+| `q` | — | 匹配源 IP / 命中规则名 |
+| `protocol` | — | 协议号：`6`=TCP / `17`=UDP / `1`=ICMP / `58`=ICMPv6 |
+
+```json
+{
+  "events": [
+    {"seq": 184223, "timestamp_ns": 1761234567890000000, "src_ip": "203.0.113.9", "protocol": 6,
+     "rule_id": 2, "rule_name": "速率限制", "dst_port": 443, "action": "DROP"}
+  ],
+  "count": 1,
+  "total": 214,
+  "window": 1000,
+  "truncated": true,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+- `seq` 为全局单调事件序号，跨页稳定，可作列表 key；
+- `total` 为窗口内应用 `q`/`protocol` 后的总条数，`window` 为环形缓冲容量，
+  `truncated` 表示当前页之外窗口内仍有数据；
+- 数据面 `DropEvent` 只包含源 IP / 协议 / 规则 ID / 目的端口，**不包含目的 IP、包长**；
+  v0.5.4 起不再返回这两个字段。
+
+### GET /api/packets（v0.5.4 服务端分页）
+
+查询采样包日志（内存缓冲，默认 `[packet_log].memory_max_entries = 50000` 条 / 8 MB）。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `limit` | 100 | 每页条数，上限 1000 |
+| `offset` | 0 | 分页偏移（v0.5.4） |
+| `ip` / `port` / `protocol` / `action` / `rule` | — | 过滤条件（`ip` 匹配源或目的地址） |
+
+响应新增 `total`（过滤后总条数）与 `limit`/`offset`；`usage` 为缓冲占用（`entries`/`bytes`）。
+
+### GET /api/audit（v0.5.4）
+
+审计日志分页查询。
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `limit` | 100 | 每页条数，**v0.5.4 收紧到 1..=1000** |
+| `offset` | 0 | 分页偏移（至多 10000） |
+| `filter` | — | 全文搜索（时间 / 操作者 / 动作 / 详情 / 来源 IP） |
+| `actor` | — | 操作者精确匹配（v0.5.4） |
+| `ip` / `action` / `from` / `to` | — | 其它过滤条件 |
+
+响应：`{entries, count, total, limit, offset}`。
+
 ### GET /api/map-usage（v0.5.0）
 
 返回每个 eBPF map 的条目数、容量与使用率。数据来自后台采样缓存
@@ -284,13 +356,17 @@ v0.5.0 可写字段：
     {"name": "CONFIG", "type": "Array", "entries": 0, "max": 1, "ratio": 0.0}
   ],
   "warn_threshold": 0.8,
+  "sampled_cap": 20000,
   "sampled_ns": 1761234567890000000
 }
 ```
 
 - `entries` 只对 LRU 表有真实采样值（`BLACKLIST`/`RATE_MAP`/`RATE_MAP_PORT`/`TRUST_MAP`/
   `CONN_TRACK`/`SYN_PROXY_CONN`/`TOP_ATTACKERS`/`PROJECT_POLICY`）；Array/RingBuf/LPM 表固定为 0；
-- `warn_threshold` 固定 0.8，运维侧告警阈值可自定；
+- `sampled_cap`（v0.5.4）：单表采样遍历上限。`entries == sampled_cap` 时真实条目数可能更大，
+  `ratio` 因此是「至少」水位；控制台显示为 `20000+`；
+- `warn_threshold` 固定 0.8；**v0.5.4 起**后台采样任务在水位 ≥ 该值时通过
+  顶层配置 `alert_webhook_url` 与通知通道（邮件，`notify.json`）告警，冷却 30 分钟；
 - 容量估算与告警规则见 [operations.md](operations.md) 与 [capacity-planning.md](capacity-planning.md)。
 
 ### GET /api/audit/verify（v0.5.0）
@@ -315,14 +391,32 @@ v0.5.0 可写字段：
 
 返回当前仍有效的黑名单条目（来自 eBPF `BLACKLIST` 实时表）。
 
+**v0.5.4 起支持服务端过滤与分页**（此前全量返回，`BLACKLIST` 上限 10 万条时约 14 MB JSON）：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `limit` | 200 | 每页条数，上限 2000 |
+| `offset` | 0 | 分页偏移 |
+| `q` | — | IP 子串过滤 |
+| `reason` | — | 封禁原因中文标签（与响应 `reason` 一致），如 `速率限制` |
+| `origin` | — | 来源标签：`api` / `adaptive` / `config` / `policy` / `data` |
+
+结果按封禁时间（`created_ns`）倒序，同时间按 IP 排序，翻页顺序稳定。
+
 ```json
 {
   "entries": [
     {"ip": "203.0.113.9", "reason": "黑名单", "origin": "api", "created_ns": 0, "expires_ns": 0, "hits": 9812443}
   ],
-  "count": 1
+  "count": 1,
+  "total": 8421,
+  "limit": 200,
+  "offset": 0
 }
 ```
+
+- `entries`/`count` 为当前页数据与条数（`count` 字段保持旧版兼容）；
+- `total`（v0.5.4）为应用 `q`/`reason`/`origin` 后的总条数。
 
 ### GET /api/whitelist
 

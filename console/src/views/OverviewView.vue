@@ -40,6 +40,8 @@ const chartLabels = computed(() => {
   }
   return out
 })
+/** v0.5.4：24h 视图由服务端降采样到 120s 粒度（720 点），避免 2.5 MB/3s 的传输。 */
+const seriesGranularity = computed(() => (range.value === '24h' ? '120s 粒度 · 已降采样' : '10s 粒度'))
 
 const reasons = computed(() => {
   const v = s.value
@@ -141,6 +143,12 @@ function fmtCap(n: number, dashWhenZero = false) {
   const c = fmtCompact(n)
   return c.value + c.unit
 }
+/** v0.5.4：单表采样遍历上限；达到上限时真实条目数可能更大，显示为 `20000+`。 */
+const sampledCap = computed(() => mapUsage.value?.sampled_cap || 0)
+function fmtEntries(m: MapUsageEntry) {
+  const base = fmtCap(m.entries)
+  return sampledCap.value > 0 && m.entries >= sampledCap.value ? `${base}+` : base
+}
 async function loadMapUsage() {
   const m = await api.mapUsage().catch(() => null)
   if (!m) return
@@ -154,14 +162,14 @@ onBeforeUnmount(() => {
 })
 
 async function loadMeta() {
-  const [mods, evs, config, hubStatus] = await Promise.all([
+  const [mods, evPage, config, hubStatus] = await Promise.all([
     api.modules(s.value as never).catch(() => [] as ModuleState[]),
-    api.attackEvents().catch(() => [] as AttackEvent[]),
+    api.attackEvents({ limit: 50 }).catch(() => null),
     api.config().catch(() => null),
     api.hubStatus().catch(() => null),
   ])
   modules.value = mods
-  events.value = evs.slice(0, 50)
+  events.value = evPage ? evPage.items.slice(0, 50) : []
   cfg.value = config
   if (hubStatus && typeof hubStatus === 'object') {
     const h = hubStatus as Record<string, unknown>
@@ -228,7 +236,7 @@ function moduleStat(m: ModuleState) {
     </div>
 
     <div class="grid grid-main-side">
-      <PanelCard title="流量趋势" :class="{ 'chart-switching': seriesLoading }" :sub="`近 ${rangeLabel} · 10s 粒度`">
+      <PanelCard title="流量趋势" :class="{ 'chart-switching': seriesLoading }" :sub="`近 ${rangeLabel} · ${seriesGranularity}`">
         <template #actions>
           <div class="legend">
             <span><i style="background: var(--accent)"></i>PPS</span>
@@ -373,12 +381,12 @@ function moduleStat(m: ModuleState) {
             <span class="hbar-track">
               <span class="hbar-fill" :class="mapRatioTone(m)" :style="{ width: Math.max(2, Math.min(100, m.ratio * 100)) + '%' }"></span>
             </span>
-            <span class="mu-val mono">{{ fmtCap(m.entries) }} / {{ fmtCap(m.max, true) }}</span>
+            <span class="mu-val mono">{{ fmtEntries(m) }} / {{ fmtCap(m.max, true) }}</span>
             <span class="mu-pct mono" :class="mapRatioTone(m)">{{ fmtPercent(m.ratio, 1) }}</span>
           </div>
           <div v-if="!mapRows.length" class="empty"><div class="title">暂无水位数据</div>等待服务端完成首次 map 采样</div>
         </div>
-        <div class="mu-foot">{{ mapTotal ? `共 ${mapTotal} 张表 · 按使用率降序 · 服务端每 30s 采样` : '等待采样' }}</div>
+        <div class="mu-foot">{{ mapTotal ? `共 ${mapTotal} 张表 · 按使用率降序 · 每 30s 采样 · 单表最多数 ${fmtInt(sampledCap || 20000)} 条（超出显示 +）` : '等待采样' }}</div>
       </PanelCard>
     </div>
 

@@ -121,12 +121,12 @@ async function unblock() {
 
     <template v-else-if="kind === 'event' || kind === 'packet'">
       <div class="detail-grid">
-        <div class="detail-cell"><div class="dc-label">源地址</div><div class="dc-value mono">{{ p.src_ip }}:{{ p.src_port }}</div></div>
-        <div class="detail-cell"><div class="dc-label">目的地址</div><div class="dc-value mono">{{ p.dst_ip }}:{{ p.dst_port }}</div></div>
+        <div class="detail-cell"><div class="dc-label">源地址</div><div class="dc-value mono">{{ p.src_ip }}{{ p.src_port != null ? ':' + p.src_port : '' }}</div></div>
+        <div class="detail-cell"><div class="dc-label">目的地址</div><div class="dc-value mono">{{ p.dst_ip || '—' }}{{ p.dst_port != null ? ':' + p.dst_port : '' }}</div></div>
         <div class="detail-cell"><div class="dc-label">协议</div><div class="dc-value">{{ p.protocol }}</div></div>
         <div class="detail-cell"><div class="dc-label">动作</div><div class="dc-value">{{ p.action }}</div></div>
         <div class="detail-cell"><div class="dc-label">命中规则</div><div class="dc-value">{{ p.rule || p.action }}</div></div>
-        <div class="detail-cell"><div class="dc-label">包长</div><div class="dc-value mono">{{ p.length }} B</div></div>
+        <div class="detail-cell"><div class="dc-label">包长</div><div class="dc-value mono">{{ p.length != null ? p.length + ' B' : '—' }}</div></div>
       </div>
       <div class="drawer-section" style="margin-top: 16px">
         <h4>原因</h4>

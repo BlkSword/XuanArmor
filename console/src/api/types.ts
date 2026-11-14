@@ -39,17 +39,21 @@ export interface Stats {
 
 export interface AttackEvent {
   id: string
+  /** 事件窗口内全局单调序号（v0.5.4 起由后端提供，作为稳定列表 key） */
+  seq?: number
   timestamp_ns: number
   src_ip: string
-  dst_ip: string
-  src_port: number
+  /** 数据面 DropEvent 不含目的 IP：v0.5.4 起不再伪造，缺失时显示 — */
+  dst_ip?: string
+  src_port?: number
   dst_port: number
   protocol: string
   action: 'DROP' | 'PASS' | string
   rule: string
   reason: string
-  length: number
-  interface: string
+  /** 数据面 DropEvent 不含包长 */
+  length?: number
+  interface?: string
 }
 
 export interface PacketSample {
@@ -199,8 +203,35 @@ export interface MapUsage {
   maps: MapUsageEntry[]
   /** 使用率告警阈值（默认 0.8） */
   warn_threshold: number
+  /** 单表条目数的采样遍历上限；entries 等于它时真实值可能更大（v0.5.4） */
+  sampled_cap?: number
   /** 最近一次采样的单调时钟纳秒（0 表示尚未采样） */
   sampled_ns: number
+}
+
+/* ------------------------------------------------------------------ 分页 */
+
+/** 服务端分页响应（v0.5.4）：`total` 为过滤后的总条数。 */
+export interface PageResult<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+/** 攻击事件分页：窗口容量固定 1000 条，`total` 为窗口内过滤后条数。 */
+export interface AttackEventPage {
+  items: AttackEvent[]
+  total: number
+  window: number
+  truncated: boolean
+}
+
+/** 包日志分页：附内存缓冲占用。 */
+export interface PacketPage {
+  items: PacketSample[]
+  total: number
+  usage: { entries: number; bytes: number }
 }
 
 /** 审计哈希链校验结果（v0.5.0 /api/audit/verify）。 */

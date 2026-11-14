@@ -236,6 +236,18 @@ impl NotifyState {
             .await;
     }
 
+    /// 发送系统告警（map 水位等，v0.5.4）。
+    ///
+    /// 只负责投递：告警冷却由调用方（`AlertManager`）控制，避免这条链路
+    /// 与 DPS 告警共用 `last_alert_s` 而互相抑制。
+    pub async fn send_system_alert(&self, event: &str, payload: Value) {
+        let cfg = self.config.read().await.clone();
+        if !cfg.enabled || !cfg.email.enabled {
+            return;
+        }
+        self.send_email(&cfg.email, event, &payload).await;
+    }
+
     async fn send_email(&self, email: &EmailConfig, event: &str, payload: &Value) -> Value {
         let started = Instant::now();
         let (ok, status, error) = match build_transport(email) {
@@ -307,6 +319,7 @@ fn build_message(model: &EmailConfig, event: &str, payload: &Value) -> anyhow::R
 fn subject_for(event: &str) -> &'static str {
     match event {
         "attack_threshold" => "攻击流量告警",
+        "map_usage" => "表项水位告警",
         "test" => "测试通知",
         _ => "通知",
     }

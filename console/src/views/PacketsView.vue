@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PanelCard from '../components/PanelCard.vue'
 import { api } from '../api/client'
 import { openDrawer } from '../stores/ui'
@@ -7,25 +7,51 @@ import type { PacketSample } from '../api/types'
 import { fmtTime } from '../utils/format'
 
 const rows = ref<PacketSample[]>([])
+/** 服务端过滤后的采样总条数（v0.5.4 服务端分页） */
+const total = ref(0)
+/** 包日志内存缓冲占用（条数 / 字节） */
+const usage = ref({ entries: 0, bytes: 0 })
 const sampling = ref<{ enabled: boolean; rate: number } | null>(null)
 const q = ref('')
 const action = ref('all')
 const page = ref(1)
 const pageSize = 25
+const loading = ref(false)
 
-const filtered = computed(() => {
-  const n = q.value.trim().toLowerCase()
-  return rows.value.filter((r) => {
-    if (action.value !== 'all' && r.action !== action.value) return false
-    if (n && !(r.src_ip + r.dst_ip + r.protocol + (r.payload_preview || '')).toLowerCase().includes(n)) return false
-    return true
-  })
+const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+
+/** v0.5.4：服务端分页 + 服务端 IP/动作过滤（搜索框匹配源/目的 IP）。 */
+async function load() {
+  loading.value = true
+  try {
+    const r = await api.packets({
+      limit: pageSize,
+      offset: (page.value - 1) * pageSize,
+      ip: q.value.trim() || undefined,
+      action: action.value === 'all' ? undefined : (action.value === 'DROP' ? 1 : 2),
+    })
+    rows.value = r.items
+    total.value = r.total
+    usage.value = r.usage
+  } finally {
+    loading.value = false
+  }
+}
+
+let filterTimer: number | undefined
+watch([q, action], () => {
+  if (filterTimer) window.clearTimeout(filterTimer)
+  filterTimer = window.setTimeout(() => {
+    page.value = 1
+    load()
+  }, 250)
 })
-const pages = computed(() => Math.max(1, Math.ceil(filtered.value.length / pageSize)))
-const paged = computed(() => filtered.value.slice((page.value - 1) * pageSize, page.value * pageSize))
+onBeforeUnmount(() => {
+  if (filterTimer) window.clearTimeout(filterTimer)
+})
 
 onMounted(async () => {
-  rows.value = await api.packets()
+  load()
   try {
     const cfg = await api.config() as Record<string, unknown>
     sampling.value = {
@@ -34,26 +60,40 @@ onMounted(async () => {
     }
   } catch { /* ignore */ }
 })
+
+function prevPage() {
+  if (page.value <= 1) return
+  page.value--
+  load()
+}
+function nextPage() {
+  if (page.value >= pages.value) return
+  page.value++
+  load()
+}
 </script>
 
 <template>
   <div class="page">
     <div class="page-head">
       <div class="page-title">包日志</div>
-      <div class="page-meta">采样包日志 · 当前 <span class="mono">{{ rows.length }}</span> 条 <span v-if="sampling">· 采样 {{ sampling.enabled ? `1/${sampling.rate}` : '已关闭' }}</span></div>
+      <div class="page-meta">
+        匹配 <span class="mono">{{ total }}</span> 条 · 缓冲占用 <span class="mono">{{ usage.entries }}</span> 条
+        <span v-if="sampling">· 采样 {{ sampling.enabled ? `1/${sampling.rate}` : '已关闭' }}</span>
+      </div>
       <div class="page-actions"><span class="state"><span class="dot warn"></span>采样</span></div>
     </div>
 
     <PanelCard flush>
       <div class="toolbar">
-        <div class="search-inline"><span>⌕</span><input v-model="q" placeholder="搜索源/目的 IP、协议或载荷" /></div>
+        <div class="search-inline"><span>⌕</span><input v-model="q" placeholder="搜索源 / 目的 IP" /></div>
         <select v-model="action" class="select" style="width: 118px">
           <option value="all">全部动作</option><option value="DROP">DROP</option><option value="PASS">PASS</option>
         </select>
         <div class="spacer"></div>
-        <span class="muted">筛选后 {{ filtered.length }} 条</span>
+        <span class="muted">第 {{ page }} / {{ pages }} 页</span>
       </div>
-      <div v-if="!rows.length" class="panel-note" style="border-top: 0">
+      <div v-if="!rows.length && !q && action === 'all'" class="panel-note" style="border-top: 0">
         暂无采样记录：请在「系统设置 → 包日志」确认已启用，并将采样率调低（如 1/16）；仅 DROP 与防护项目 PASS 的流量会被采样。
       </div>
       <div class="table-wrap">
@@ -62,7 +102,7 @@ onMounted(async () => {
             <tr><th>时间</th><th>源地址</th><th>目的地址</th><th>协议</th><th>TCP 标志</th><th>载荷预览</th><th>动作</th><th class="col-num">包长</th><th class="col-actions">操作</th></tr>
           </thead>
           <tbody>
-            <tr v-for="r in paged" :key="r.id">
+            <tr v-for="r in rows" :key="r.id">
               <td class="mono muted">{{ fmtTime(r.timestamp_ns) }}</td>
               <td>
                 <span class="mono cell-link" @click="openDrawer('IP 详情', 'ip', { ip: r.src_ip, count: 0 })">{{ r.src_ip }}</span>
@@ -81,15 +121,15 @@ onMounted(async () => {
                 <div class="row-actions"><button class="btn btn-sm" @click="openDrawer('数据包详情', 'packet', r)">查看</button></div>
               </td>
             </tr>
-            <tr v-if="!paged.length"><td colspan="9" class="empty"><div class="title">暂无采样包</div>开启包日志采样后，此处会显示 DROP 包的前 N 字节</td></tr>
+            <tr v-if="!rows.length"><td colspan="9" class="empty"><div class="title">暂无采样包</div>没有匹配当前过滤条件的采样记录</td></tr>
           </tbody>
         </table>
       </div>
       <div class="tfoot">
-        <span>第 {{ page }} / {{ pages }} 页 · 每页 {{ pageSize }} 条</span>
+        <span>每页 {{ pageSize }} 条 · 共 {{ total }} 条 · 缓冲已用 {{ usage.entries }} 条</span>
         <div class="pager">
-          <button class="btn btn-sm" :disabled="page <= 1" @click="page--">上一页</button>
-          <button class="btn btn-sm" :disabled="page >= pages" @click="page++">下一页</button>
+          <button class="btn btn-sm" :disabled="page <= 1 || loading" @click="prevPage">上一页</button>
+          <button class="btn btn-sm" :disabled="page >= pages || loading" @click="nextPage">下一页</button>
         </div>
       </div>
     </PanelCard>

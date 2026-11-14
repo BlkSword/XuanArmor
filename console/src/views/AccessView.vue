@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import PanelCard from '../components/PanelCard.vue'
 import { api } from '../api/client'
 import { toast } from '../stores/app'
@@ -9,38 +9,82 @@ import { fmtDuration, fmtInt, reasonLabel } from '../utils/format'
 
 const tab = ref<'black' | 'white' | 'acl'>('black')
 const blocks = ref<BlockEntry[]>([])
+/** 服务端过滤后的黑名单总条数（v0.5.4 服务端分页，只渲染当前页） */
+const total = ref(0)
 const whites = ref<WhitelistEntry[]>([])
 const acls = ref<PortAclEntry[]>([])
 const q = ref('')
 const reason = ref('all')
 const origin = ref('all')
+const page = ref(1)
+const pageSize = 100
 const selected = ref<Set<string>>(new Set())
 const busy = ref(false)
+const loading = ref(false)
 
-const shownBlocks = computed(() =>
-  blocks.value.filter((b) => {
-    if (reason.value !== 'all' && b.reason !== reason.value) return false
-    if (origin.value !== 'all' && b.origin !== origin.value) return false
-    const n = q.value.trim().toLowerCase()
-    if (n && !(b.ip + b.reason + (b.last_reason || '') + b.origin).toLowerCase().includes(n)) return false
-    return true
-  }),
-)
-const reasons = computed(() => [...new Set(blocks.value.map((b) => b.reason).filter(Boolean))])
-const origins = computed(() => [...new Set(blocks.value.map((b) => b.origin).filter(Boolean))])
-const allChecked = computed(() => shownBlocks.value.length > 0 && shownBlocks.value.every((b) => selected.value.has(b.ip)))
+const pages = computed(() => Math.max(1, Math.ceil(total.value / pageSize)))
+/** 筛选下拉选项：累积历史页出现过的值，避免选中后选项消失无法切回。 */
+const reasonOptions = ref<string[]>([])
+const originOptions = ref<string[]>([])
+const allChecked = computed(() => blocks.value.length > 0 && blocks.value.every((b) => selected.value.has(b.ip)))
 
 async function load() {
-  const [b, w, a] = await Promise.all([api.blacklist(), api.whitelist(), api.portAcl()])
-  blocks.value = b
-  whites.value = w
-  acls.value = a
-  const keep = new Set([...selected.value].filter((ip) => b.some((x) => x.ip === ip)))
-  selected.value = keep
+  loading.value = true
+  try {
+    const [b, w, a] = await Promise.all([
+      api.blacklist({
+        limit: pageSize,
+        offset: (page.value - 1) * pageSize,
+        q: q.value.trim() || undefined,
+        reason: reason.value !== 'all' ? reason.value : undefined,
+        origin: origin.value !== 'all' ? origin.value : undefined,
+      }),
+      api.whitelist(),
+      api.portAcl(),
+    ])
+    blocks.value = b.items
+    total.value = b.total
+    whites.value = w
+    acls.value = a
+    reasonOptions.value = [...new Set([
+      ...reasonOptions.value,
+      ...b.items.map((x) => x.reason).filter(Boolean),
+    ])]
+    originOptions.value = [...new Set([
+      ...originOptions.value,
+      ...b.items.map((x) => x.origin).filter(Boolean),
+    ])]
+    // 翻页/筛选后清空跨页选中，避免批量解除误伤不可见条目
+    selected.value = new Set()
+  } finally {
+    loading.value = false
+  }
 }
+
+let filterTimer: number | undefined
+watch([q, reason, origin], () => {
+  if (filterTimer) window.clearTimeout(filterTimer)
+  filterTimer = window.setTimeout(() => {
+    page.value = 1
+    load()
+  }, 250)
+})
+onBeforeUnmount(() => {
+  if (filterTimer) window.clearTimeout(filterTimer)
+})
 onMounted(load)
 window.addEventListener('xuanarmor:saved', () => load())
 
+function prevPage() {
+  if (page.value <= 1) return
+  page.value--
+  load()
+}
+function nextPage() {
+  if (page.value >= pages.value) return
+  page.value++
+  load()
+}
 function toggle(ip: string) {
   const next = new Set(selected.value)
   next.has(ip) ? next.delete(ip) : next.add(ip)
@@ -48,8 +92,8 @@ function toggle(ip: string) {
 }
 function toggleAll() {
   const next = new Set(selected.value)
-  if (allChecked.value) shownBlocks.value.forEach((b) => next.delete(b.ip))
-  else shownBlocks.value.forEach((b) => next.add(b.ip))
+  if (allChecked.value) blocks.value.forEach((b) => next.delete(b.ip))
+  else blocks.value.forEach((b) => next.add(b.ip))
   selected.value = next
 }
 async function unblock(ip: string) {
@@ -83,12 +127,13 @@ async function saveAcl() {
   await api.savePortAcl(acls.value)
   toast('端口 ACL 已保存', `${acls.value.length} 条规则`, 'ok')
 }
+/** 只清理当前页中已过期的封禁（服务端分页后不再全量遍历）。 */
 async function unblockAllExpired() {
   busy.value = true
   try {
     const expired = blocks.value.filter((b) => b.expires_ns && b.expires_ns <= Date.now() * 1e6)
     for (const b of expired) await api.unblock(b.ip)
-    toast('已清理过期封禁', `${expired.length} 条`, 'ok')
+    toast('已清理当前页过期封禁', `${expired.length} 条`, 'ok')
     load()
   } finally {
     busy.value = false
@@ -101,12 +146,12 @@ async function unblockAllExpired() {
     <div class="page-head">
       <div class="page-title">访问控制</div>
       <div class="page-meta">
-        黑名单 <span class="mono">{{ fmtInt(blocks.length) }}</span> · 白名单
+        黑名单 <span class="mono">{{ fmtInt(total) }}</span> · 白名单
         <span class="mono">{{ fmtInt(whites.length) }}</span> · ACL
         <span class="mono">{{ fmtInt(acls.length) }}</span>
       </div>
       <div class="page-actions">
-        <button class="btn btn-sm" @click="load">刷新</button>
+        <button class="btn btn-sm" :disabled="loading" @click="load">刷新</button>
         <button v-if="tab === 'black'" class="btn btn-primary btn-sm" @click="openModal('封禁 IP', 'block-ip')">封禁 IP</button>
         <button v-if="tab === 'white'" class="btn btn-primary btn-sm" @click="openModal('添加白名单', 'whitelist')">添加白名单</button>
         <button v-if="tab === 'acl'" class="btn btn-primary btn-sm" @click="saveAcl">保存 ACL</button>
@@ -116,7 +161,7 @@ async function unblockAllExpired() {
     <PanelCard flush>
       <div class="tabs">
         <button class="tab" :class="{ active: tab === 'black' }" @click="tab = 'black'">
-          黑名单 <span class="nav-badge">{{ blocks.length }}</span>
+          黑名单 <span class="nav-badge">{{ total }}</span>
         </button>
         <button class="tab" :class="{ active: tab === 'white' }" @click="tab = 'white'">
           白名单 <span class="nav-badge">{{ whites.length }}</span>
@@ -131,15 +176,15 @@ async function unblockAllExpired() {
           <div class="search-inline"><span>⌕</span><input v-model="q" placeholder="搜索 IP / 原因 / 来源" /></div>
           <select v-model="reason" class="select" style="width: 132px">
             <option value="all">全部原因</option>
-            <option v-for="r in reasons" :key="r" :value="r">{{ reasonLabel(r) }}</option>
+            <option v-for="r in reasonOptions" :key="r" :value="r">{{ reasonLabel(r) }}</option>
           </select>
           <select v-model="origin" class="select" style="width: 122px">
             <option value="all">全部来源</option>
-            <option v-for="o in origins" :key="o" :value="o">{{ o }}</option>
+            <option v-for="o in originOptions" :key="o" :value="o">{{ o }}</option>
           </select>
           <div class="spacer"></div>
-          <span class="muted">筛选后 {{ fmtInt(shownBlocks.length) }} 条</span>
-          <button class="btn btn-ghost btn-sm" :disabled="busy" @click="unblockAllExpired">清理已过期</button>
+          <span class="muted">第 {{ page }} / {{ pages }} 页</span>
+          <button class="btn btn-ghost btn-sm" :disabled="busy" @click="unblockAllExpired">清理当前页过期</button>
         </div>
 
         <div v-if="selected.size" class="bulkbar">
@@ -159,7 +204,7 @@ async function unblockAllExpired() {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="b in shownBlocks" :key="b.ip" :class="{ selected: selected.has(b.ip) }">
+              <tr v-for="b in blocks" :key="b.ip" :class="{ selected: selected.has(b.ip) }">
                 <td class="col-check"><input type="checkbox" :checked="selected.has(b.ip)" @change="toggle(b.ip)" /></td>
                 <td>
                   <span class="mono cell-link" @click="openDrawer('IP 详情', 'ip', { ip: b.ip, count: b.hits })">{{ b.ip }}</span>
@@ -181,12 +226,16 @@ async function unblockAllExpired() {
                   </div>
                 </td>
               </tr>
-              <tr v-if="!shownBlocks.length"><td colspan="7" class="empty"><div class="title">黑名单为空</div>没有正在封禁的源地址</td></tr>
+              <tr v-if="!blocks.length"><td colspan="7" class="empty"><div class="title">黑名单为空</div>没有正在封禁的源地址</td></tr>
             </tbody>
           </table>
         </div>
         <div class="tfoot">
-          <span>显示 {{ shownBlocks.length }} 条 · 白名单优先级最高，黑名单在防护项目之前生效</span>
+          <span>本页 {{ blocks.length }} 条 / 共 {{ fmtInt(total) }} 条 · 服务端分页，白名单优先级最高、黑名单在防护项目之前生效</span>
+          <div class="pager">
+            <button class="btn btn-sm" :disabled="page <= 1 || loading" @click="prevPage">上一页</button>
+            <button class="btn btn-sm" :disabled="page >= pages || loading" @click="nextPage">下一页</button>
+          </div>
         </div>
       </template>
 

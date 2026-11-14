@@ -6,6 +6,16 @@ use crate::time::monotonic_secs as monotonic_now_secs;
 use crate::ip::format_ip_key;
 use crate::state::Stats;
 
+/// 单个时序点内保留的攻击源条数（v0.5.4）。
+///
+/// 历史实现每个采样点都克隆整张 `TOP_ATTACKERS`（上限 256 条）与
+/// `port_dropped`：8640 点 × 256 条 ≈ 200 MB 级内存，同时放大 redb 增量
+/// 写入量。API 返回时本就只消费 Top 榜，这里在存储侧同样只保留 Top N。
+/// 副作用：`/api/metrics/attacker-series` 仅对 Top N 攻击源有非零曲线。
+const SNAPSHOT_TOP_ATTACKERS: usize = 20;
+/// 单个时序点内保留的被攻击端口条数（v0.5.4）。
+const SNAPSHOT_TOP_PORTS: usize = 10;
+
 /// A single sampled metrics point.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct MetricPoint {
@@ -125,7 +135,8 @@ impl TimeSeriesWindow {
             None
         };
 
-        let top_attackers: HashMap<String, u64> = stats
+        // v0.5.4：只快照 Top N，避免每个时序点克隆整张大表。
+        let mut top: Vec<(String, u64)> = stats
             .top_attackers
             .iter()
             .map(|entry| {
@@ -133,12 +144,18 @@ impl TimeSeriesWindow {
                 (ip, entry.value().load(Ordering::Relaxed))
             })
             .collect();
+        top.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        top.truncate(SNAPSHOT_TOP_ATTACKERS);
+        let top_attackers: HashMap<String, u64> = top.into_iter().collect();
 
-        let port_dropped: HashMap<u16, u64> = stats
+        let mut ports: Vec<(u16, u64)> = stats
             .port_dropped
             .iter()
             .map(|entry| (*entry.key(), entry.value().load(Ordering::Relaxed)))
             .collect();
+        ports.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ports.truncate(SNAPSHOT_TOP_PORTS);
+        let port_dropped: HashMap<u16, u64> = ports.into_iter().collect();
 
         let point = MetricPoint {
             timestamp: now,

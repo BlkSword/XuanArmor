@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased — 控制台大数量统计治理（性能与上限）
+
+> 大规模攻击（黑名单逼近 10 万条、24h 趋势窗口、事件/审计列表）下控制台不再卡死；
+> REST API 有新增分页参数与响应字段（向后兼容：旧字段保留）。
+
+### 新增
+
+- **JSON 响应 gzip 压缩**：`/api/*` 与 `/metrics` 在客户端 `Accept-Encoding: gzip` 时压缩
+  （此前只有控制台 HTML 压缩）。24h 趋势图响应从约 2.5 MB 降到约 200–300 KB。
+- **趋势图服务端降采样**：`GET /api/metrics/series` 按 `duration_s` 自动降采样
+  （15m 保持 10s 粒度、1h 360 点、24h 720 点即 120s 粒度），可用 `points=` 覆盖；
+  响应新增 `points` / `downsampled`。
+- **服务端分页与过滤**：
+  - `GET /api/blacklist`：`limit`（默认 200、上限 2000）/`offset`/`q`/`reason`/`origin`，
+    响应新增 `total`。此前全量返回，10 万条时约 14 MB JSON + 前端 10 万行 DOM。
+  - `GET /api/attack-events`：`limit`（默认 50、上限 200）/`offset`/`q`/`protocol`，
+    响应新增 `total` / `window` / `truncated` 与稳定 `seq`。
+  - `GET /api/packets`：新增 `offset` 与 `total`。
+  - `GET /api/audit`：`limit` 收紧到 1..=1000，新增 `actor`，`filter` 覆盖来源 IP。
+- **map 水位告警**：表项使用率 ≥ 80% 时按 30 分钟冷却通过 `alert_webhook_url` 与
+  通知通道（邮件）告警，与 DPS 告警互不抑制。
+- 控制台「访问控制 / 攻击事件 / 审计日志 / 包日志」四页改为服务端分页；
+  审计页消费 `/api/audit/stream` SSE 并提示新记录；表项水位显示采样上限（`20000+`）。
+
+### 变更
+
+- 时序点内部只保留 Top 20 攻击源 / Top 10 被攻击端口，抑制「8640 点 × 256 条」带来的
+  内存与 redb 写入放大；`/api/metrics/attacker-series` 因此仅 Top 20 攻击源有非零曲线。
+- 控制台攻击事件表移除「目的 IP / 包长」列：数据面 `DropEvent` 并不包含这两个字段，
+  旧展示值来自前端兜底，属于失真。
+
+### 修复
+
+- 攻击事件页「共 N 条采样记录」不再把已拉取条数当总数（真实窗口为最近 1000 条）。
+- 审计页 SSE 连接建立后未消费消息，实时推送标记名不副实。
+- 长时间停留在 24h 视图时每 3 秒拉取全量时序导致的浏览器卡顿与内网带宽占用。
+- `/api/audit` 的 `limit` 未做上限约束（此前可一次拉满 1 万条）。
+
+### 已知边界
+
+- 浏览器控制台用 JS `Number` 解析累计计数，超过 `2^53` 后显示精度下降（100 万 pps 约 285 年
+  才达到；u64 本身不会溢出）。详见 [docs/capacity-planning.md](docs/capacity-planning.md) 第 7.8 节。
+
 ## 0.5.3 (2026-11-08) — 告警通知、Token 管理与控制台完善
 
 ### 新增

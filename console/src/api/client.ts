@@ -1,7 +1,8 @@
 import * as mock from './mock'
 import type {
-  AttackEvent, AuditEntry, AuditVerifyReport, BlockEntry, ConfigSnapshot, L7Pattern, MapUsage,
-  ModuleState, PacketSample, PortAclEntry, ProtectionProject, Role, SeriesPoint, Stats, WhitelistEntry,
+  AttackEvent, AttackEventPage, AuditEntry, AuditVerifyReport, BlockEntry, ConfigSnapshot, L7Pattern,
+  MapUsage, ModuleState, PacketPage, PacketSample, PageResult, PortAclEntry, ProtectionProject, Role,
+  SeriesPoint, Stats, WhitelistEntry,
 } from './types'
 import { reasonLabel } from '../utils/format'
 
@@ -119,18 +120,20 @@ function normalizeEvents(raw: any): AttackEvent[] {
   return list.map((e: any, i: number) => {
     const rule = normalizeRuleName(e)
     return {
-      id: e.id || `evt-${e.timestamp_ns ?? i}-${i}`,
+      // v0.5.4：后端提供窗口内全局序号，作为跨页稳定的列表 key
+      id: e.seq != null ? `evt-${e.seq}` : (e.id || `evt-${e.timestamp_ns ?? i}-${i}`),
+      seq: typeof e.seq === 'number' ? e.seq : undefined,
       timestamp_ns: Number(e.timestamp_ns ?? Date.now() * 1e6),
       src_ip: String(e.src_ip ?? '—'),
-      dst_ip: String(e.dst_ip ?? '—'),
-      src_port: Number(e.src_port ?? 0),
+      dst_ip: e.dst_ip != null ? String(e.dst_ip) : undefined,
+      src_port: typeof e.src_port === 'number' ? e.src_port : undefined,
       dst_port: Number(e.dst_port ?? 0),
       protocol: protoName(e.protocol),
       action: actionName(e.action),
       rule,
       reason: e.reason ? reasonLabel(e.reason) : rule,
-      length: Number(e.length ?? e.packet_len ?? 0),
-      interface: String(e.interface ?? 'eth0'),
+      length: typeof e.length === 'number' ? e.length : undefined,
+      interface: e.interface ? String(e.interface) : undefined,
     }
   })
 }
@@ -158,7 +161,8 @@ const AUDIT_LABELS: Record<string, string> = {
   Login: '登录', ResetToken: '重置令牌',
 }
 
-function normalizeAudit(raw: any): AuditEntry[] {
+/** 后端审计条目 → 控制台展示结构；导出供审计 SSE 实时消息复用（v0.5.4）。 */
+export function normalizeAudit(raw: any): AuditEntry[] {
   const list = Array.isArray(raw) ? raw : (raw?.entries || [])
   return list.map((e: any, i: number) => {
     const detail = e.detail ?? {}
@@ -257,6 +261,50 @@ function emptyStats(): Stats {
   } as unknown as Stats
 }
 
+/** 服务端分页查询选项（v0.5.4）。 */
+export interface AttackEventsOptions {
+  limit?: number
+  offset?: number
+  /** 匹配源 IP / 命中规则 */
+  q?: string
+  /** 协议号：6=TCP / 17=UDP / 1=ICMP */
+  protocol?: number
+}
+
+export interface PacketsOptions {
+  limit?: number
+  offset?: number
+  /** 匹配源/目的 IP */
+  ip?: string
+  /** 1=DROP / 2=PASS */
+  action?: number
+}
+
+export interface AuditOptions {
+  limit?: number
+  offset?: number
+  /** 全文搜索（动作/操作者/来源 IP/详情） */
+  filter?: string
+  /** 操作者精确匹配（all 表示不过滤） */
+  actor?: string
+}
+
+export interface BlacklistOptions {
+  limit?: number
+  offset?: number
+  /** IP 子串 */
+  q?: string
+  /** 封禁原因中文标签 */
+  reason?: string
+  /** 来源标签 */
+  origin?: string
+}
+
+/** mock 模式下模拟服务端分页（与后端返回结构保持一致）。 */
+function mockPage<T>(list: T[], offset: number, limit: number): PageResult<T> {
+  return { items: list.slice(offset, offset + limit), total: list.length, limit, offset }
+}
+
 export const api = {
   isLive: () => state.live,
 
@@ -284,7 +332,7 @@ export const api = {
   async mapUsage(): Promise<MapUsage> {
     if (state.mode === 'mock') return mock.makeMapUsage()
     const r = await fetchOrNull<any>('/api/map-usage')
-    if (!r) return { maps: [], warn_threshold: 0.8, sampled_ns: 0 }
+    if (!r) return { maps: [], warn_threshold: 0.8, sampled_ns: 0, sampled_cap: 0 }
     const maps: any[] = Array.isArray(r.maps) ? r.maps : []
     return {
       maps: maps.map((m: any) => {
@@ -300,6 +348,7 @@ export const api = {
         }
       }),
       warn_threshold: Number(r.warn_threshold ?? 0.8),
+      sampled_cap: Number(r.sampled_cap ?? 0),
       sampled_ns: Number(r.sampled_ns ?? 0),
     }
   },
@@ -325,25 +374,122 @@ export const api = {
     const r = await fetchOrNull<any>(`/api/metrics/series?duration_s=${Math.max(60, Math.floor(durationSeconds))}`)
     return r ? normalizeSeries(r) : []
   },
-  async attackEvents(): Promise<AttackEvent[]> {
-    if (state.mode === 'mock') return mock.makeAttackEvents()
-    const r = await fetchOrNull<any>('/api/attack-events?limit=200')
-    return r ? normalizeEvents(r) : []
+  /**
+   * 攻击事件（v0.5.4 服务端分页）。
+   *
+   * 服务端只保留最近 1000 条环形缓冲；`total` 是窗口内过滤后的条数，
+   * `truncated` 表示除当前页外窗口内仍有数据。
+   */
+  async attackEvents(opts: AttackEventsOptions = {}): Promise<AttackEventPage> {
+    const limit = Math.min(Math.max(opts.limit ?? 200, 1), 200)
+    const offset = Math.max(opts.offset ?? 0, 0)
+    const q = (opts.q || '').trim()
+    if (state.mode === 'mock') {
+      const filtered = mock.makeAttackEvents().filter((r) => {
+        if (opts.protocol != null && r.protocol.toUpperCase() !== (PROTO_NAMES[opts.protocol] || '')) return false
+        if (q && !(r.src_ip + r.rule + r.reason).toLowerCase().includes(q.toLowerCase())) return false
+        return true
+      })
+      const page = mockPage(filtered, offset, limit)
+      return { items: page.items, total: page.total, window: 1000, truncated: page.total > offset + page.items.length }
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (offset) params.set('offset', String(offset))
+    if (q) params.set('q', q)
+    if (opts.protocol != null) params.set('protocol', String(opts.protocol))
+    const r = await fetchOrNull<any>(`/api/attack-events?${params.toString()}`)
+    if (!r) return { items: [], total: 0, window: 1000, truncated: false }
+    return {
+      items: normalizeEvents(r),
+      total: Number(r.total ?? r.count ?? 0),
+      window: Number(r.window ?? 1000),
+      truncated: !!r.truncated,
+    }
   },
-  async packets(): Promise<PacketSample[]> {
-    if (state.mode === 'mock') return mock.makePacketSamples()
-    const r = await fetchOrNull<any>('/api/packets?limit=200')
-    return r ? normalizePackets(r) : []
+  async packets(opts: PacketsOptions = {}): Promise<PacketPage> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000)
+    const offset = Math.max(opts.offset ?? 0, 0)
+    if (state.mode === 'mock') {
+      const ip = (opts.ip || '').trim().toLowerCase()
+      const filtered = mock.makePacketSamples().filter((r) => {
+        if (opts.action != null && (r.action === 'DROP' ? 1 : 2) !== opts.action) return false
+        if (ip && !(r.src_ip + r.dst_ip).toLowerCase().includes(ip)) return false
+        return true
+      })
+      const page = mockPage(filtered, offset, limit)
+      return { items: page.items, total: page.total, usage: { entries: page.total, bytes: 0 } }
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (offset) params.set('offset', String(offset))
+    if (opts.ip) params.set('ip', opts.ip)
+    if (opts.action != null) params.set('action', String(opts.action))
+    const r = await fetchOrNull<any>(`/api/packets?${params.toString()}`)
+    if (!r) return { items: [], total: 0, usage: { entries: 0, bytes: 0 } }
+    return {
+      items: normalizePackets(r),
+      total: Number(r.total ?? r.count ?? 0),
+      usage: {
+        entries: Number(r.usage?.entries ?? 0),
+        bytes: Number(r.usage?.bytes ?? 0),
+      },
+    }
   },
-  async audit(): Promise<AuditEntry[]> {
-    if (state.mode === 'mock') return mock.makeAudit()
-    const r = await fetchOrNull<any>('/api/audit?limit=200')
-    return r ? normalizeAudit(r) : []
+  async audit(opts: AuditOptions = {}): Promise<PageResult<AuditEntry>> {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000)
+    const offset = Math.max(opts.offset ?? 0, 0)
+    const filter = (opts.filter || '').trim().toLowerCase()
+    const actor = opts.actor && opts.actor !== 'all' ? opts.actor : ''
+    if (state.mode === 'mock') {
+      const filtered = mock.makeAudit().filter((r) => {
+        if (actor && r.actor !== actor) return false
+        if (filter && !(r.action + r.target + r.detail + r.source_ip).toLowerCase().includes(filter)) return false
+        return true
+      })
+      return mockPage(filtered, offset, limit)
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (offset) params.set('offset', String(offset))
+    if (filter) params.set('filter', filter)
+    if (actor) params.set('actor', actor)
+    const r = await fetchOrNull<any>(`/api/audit?${params.toString()}`)
+    if (!r) return { items: [], total: 0, limit, offset }
+    return {
+      items: normalizeAudit(r),
+      total: Number(r.total ?? r.count ?? 0),
+      limit,
+      offset,
+    }
   },
-  async blacklist(): Promise<BlockEntry[]> {
-    if (state.mode === 'mock') return mock.makeBlacklist()
-    const r = await fetchOrNull<any>('/api/blacklist')
-    return r ? normalizeBlocks(r) : []
+  async blacklist(opts: BlacklistOptions = {}): Promise<PageResult<BlockEntry>> {
+    const limit = Math.min(Math.max(opts.limit ?? 200, 1), 2000)
+    const offset = Math.max(opts.offset ?? 0, 0)
+    const q = (opts.q || '').trim().toLowerCase()
+    if (state.mode === 'mock') {
+      const filtered = mock.makeBlacklist().filter((b) => {
+        if (opts.reason && opts.reason !== 'all' && b.reason !== opts.reason) return false
+        if (opts.origin && opts.origin !== 'all' && b.origin !== opts.origin) return false
+        if (q && !(b.ip + b.reason + (b.last_reason || '') + b.origin).toLowerCase().includes(q)) return false
+        return true
+      })
+      return mockPage(filtered, offset, limit)
+    }
+    const params = new URLSearchParams()
+    params.set('limit', String(limit))
+    if (offset) params.set('offset', String(offset))
+    if (q) params.set('q', q)
+    if (opts.reason && opts.reason !== 'all') params.set('reason', opts.reason)
+    if (opts.origin && opts.origin !== 'all') params.set('origin', opts.origin)
+    const r = await fetchOrNull<any>(`/api/blacklist?${params.toString()}`)
+    if (!r) return { items: [], total: 0, limit, offset }
+    return {
+      items: normalizeBlocks(r),
+      total: Number(r.total ?? r.count ?? 0),
+      limit,
+      offset,
+    }
   },
   async whitelist(): Promise<WhitelistEntry[]> {
     if (state.mode === 'mock') return mock.whitelist.map((w) => ({ ...w }))

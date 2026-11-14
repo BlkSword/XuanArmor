@@ -6,8 +6,8 @@ import SlideDrawer from './components/SlideDrawer.vue'
 import ModalDialog from './components/ModalDialog.vue'
 import CommandPalette from './components/CommandPalette.vue'
 import ToastHost from './components/ToastHost.vue'
-import { checkUpdate, commandOpen, initTheme, refresh, setRole, store } from './stores/app'
-import { api } from './api/client'
+import { checkUpdate, commandOpen, initTheme, pushLiveAudit, refresh, setRole, store } from './stores/app'
+import { api, normalizeAudit } from './api/client'
 import { useRoute, useRouter } from 'vue-router'
 
 const sidebarOpen = ref(false)
@@ -63,6 +63,14 @@ onMounted(() => {
   if (location.protocol.startsWith('http')) {
     try {
       es = new EventSource('/api/audit/stream')
+      // v0.5.4：真正消费审计 SSE 消息（此前只建连接不处理，页面不会实时更新）。
+      es.addEventListener('audit', (event) => {
+        try {
+          const raw = JSON.parse((event as MessageEvent).data)
+          const [entry] = normalizeAudit([raw])
+          if (entry) pushLiveAudit(entry)
+        } catch { /* 忽略单条坏消息，保持连接 */ }
+      })
       es.onerror = () => { es?.close(); es = undefined }
     } catch { /* demo mode */ }
   }

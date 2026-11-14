@@ -477,6 +477,14 @@ sync_rules_enabled = true
   彻底卸载用 `xuanarmor detach`，或把 `persist_link` 设为 `false` 恢复退出即卸载。
   容器/自定义 mount namespace 中需保证 bpffs 在启动前已挂载（否则回退 `/run/xuanarmor-bpf`）。
 - **eBPF 构建**：debug 构建因 `overflow-checks` 与未内联代码容易导致 verifier/bpf-linker 失败，因此工作空间默认 `opt-level = 3`；发布构建使用 `panic = abort`、`lto = true`、`strip = true`。
+- **控制台大数据量（v0.5.4）**：列表接口全部服务端分页 —— `GET /api/blacklist`（默认 200/页，
+  可 `q`/`reason`/`origin` 过滤）、`GET /api/attack-events`（服务端窗口最近 1000 条，
+  默认 50/页、单页上限 200）、`GET /api/packets`（`offset`）、`GET /api/audit`（`limit ≤ 1000`）。
+  `GET /api/metrics/series` 按时长自动降采样（24h → 720 点 / 120s 粒度），所有 JSON/文本响应
+  支持 gzip。`/api/map-usage` 单表采样遍历上限 20000 条（`entries == sampled_cap` 时真实值可能更大，
+  控制台显示 `20000+`），表项水位 ≥80% 时内置 webhook/邮件告警（30 分钟冷却）。
+  时序点内部只保留 Top 20 攻击源 / Top 10 端口，`/api/metrics/attacker-series` 因此仅 Top 20 有曲线。
+  浏览器端累计计数超过 2^53 后显示精度下降（u64 不溢出，见 `docs/capacity-planning.md` 7.8）。
 
 ---
 
