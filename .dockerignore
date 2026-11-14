@@ -4,5 +4,10 @@ target/
 *.md
 scripts/
 tests/
+design/
+dist/
+console/node_modules/
+console/dist/
+console/design-preview/
 packaging/ansible/
 packaging/terraform/

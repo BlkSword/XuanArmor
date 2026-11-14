@@ -380,6 +380,17 @@ fn idempotency_store(state: &WebState, headers: &HeaderMap, status: u16, body: &
         }
         if let Ok(mut cache) = state.idem.lock() {
             cache.retain(|_, (at, _, _)| at.elapsed() < Duration::from_secs(600));
+            // 容量上限：防止持有 admin Token 的调用方用不同 Idempotency-Key 撑爆内存。
+            const MAX_IDEM_ENTRIES: usize = 1024;
+            if cache.len() >= MAX_IDEM_ENTRIES {
+                if let Some(oldest) = cache
+                    .iter()
+                    .min_by_key(|(_, (at, _, _))| *at)
+                    .map(|(k, _)| k.clone())
+                {
+                    cache.remove(&oldest);
+                }
+            }
             cache.insert(key.to_string(), (Instant::now(), status, body.clone()));
         }
     }

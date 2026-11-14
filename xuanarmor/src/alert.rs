@@ -204,8 +204,7 @@ impl AlertManager {
             .filter(|m| {
                 m.max_entries > 0
                     && (m.capped
-                        || (m.entries as f64 / m.max_entries as f64)
-                            >= MAP_USAGE_WARN_THRESHOLD)
+                        || (m.entries as f64 / m.max_entries as f64) >= MAP_USAGE_WARN_THRESHOLD)
             })
             .collect();
         if over.is_empty() {

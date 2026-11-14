@@ -51,34 +51,54 @@ async function bootstrapAuth() {
   refresh()
 }
 
+// 审计 SSE：断线后按 3s→30s 退避重连（此前 onerror 直接关闭，网络抖动后实时流永久失效）。
+let sseRetryTimer: number | undefined
+let sseRetryDelay = 3000
+function connectAuditStream() {
+  try {
+    es = new EventSource('/api/audit/stream')
+    es.onopen = () => { sseRetryDelay = 3000 }
+    es.addEventListener('audit', (event) => {
+      try {
+        const raw = JSON.parse((event as MessageEvent).data)
+        const [entry] = normalizeAudit([raw])
+        if (entry) pushLiveAudit(entry)
+      } catch { /* 忽略单条坏消息，保持连接 */ }
+    })
+    es.onerror = () => {
+      es?.close()
+      es = undefined
+      if (sseRetryTimer) window.clearTimeout(sseRetryTimer)
+      sseRetryTimer = window.setTimeout(() => {
+        sseRetryTimer = undefined
+        connectAuditStream()
+      }, sseRetryDelay)
+      sseRetryDelay = Math.min(sseRetryDelay * 2, 30000)
+    }
+  } catch { /* demo mode */ }
+}
+
+const onSaved = () => refresh(true)
+let updateTimer: number | undefined
+
 onMounted(() => {
   checkUpdate()
-  window.setInterval(checkUpdate, 30 * 60 * 1000)
+  updateTimer = window.setInterval(checkUpdate, 30 * 60 * 1000)
   initTheme()
   bootstrapAuth()
   timer = window.setInterval(() => refresh(), 3000)
   window.addEventListener('keydown', onKey)
-  window.addEventListener('xuanarmor:saved', () => refresh(true))
+  window.addEventListener('xuanarmor:saved', onSaved)
   // Live audit stream is only useful when the console is served by XuanArmor.
-  if (location.protocol.startsWith('http')) {
-    try {
-      es = new EventSource('/api/audit/stream')
-      // v0.5.4：真正消费审计 SSE 消息（此前只建连接不处理，页面不会实时更新）。
-      es.addEventListener('audit', (event) => {
-        try {
-          const raw = JSON.parse((event as MessageEvent).data)
-          const [entry] = normalizeAudit([raw])
-          if (entry) pushLiveAudit(entry)
-        } catch { /* 忽略单条坏消息，保持连接 */ }
-      })
-      es.onerror = () => { es?.close(); es = undefined }
-    } catch { /* demo mode */ }
-  }
+  if (location.protocol.startsWith('http')) connectAuditStream()
 })
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer)
+  if (updateTimer) clearInterval(updateTimer)
+  if (sseRetryTimer) window.clearTimeout(sseRetryTimer)
   es?.close()
   window.removeEventListener('keydown', onKey)
+  window.removeEventListener('xuanarmor:saved', onSaved)
 })
 </script>
 

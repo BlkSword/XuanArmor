@@ -30,6 +30,13 @@ if [ -z "$SKIP_BUILD" ]; then
     "$CARGO" build --package xuanarmor-hub --release -q
 fi
 
+# 允许 SKIP_BUILD=1 跳过主二进制构建，但 Hub 二进制是测试必需项：
+# 缺失时只补建 Hub，避免直接 cp 失败（CI/本机重复跑测试时很常见）。
+if [ -n "$SKIP_BUILD" ] && [ ! -x "target/release/xuanarmor-hub" ]; then
+    echo "=== SKIP_BUILD=1 但缺少 Hub 二进制，补建 xuanarmor-hub ==="
+    "$CARGO" build --package xuanarmor-hub --release -q
+fi
+
 # 只清理本测试使用的 /tmp 二进制对应进程，避免误伤宿主机上的生产实例
 pkill -9 -f '^/tmp/xuanarmor( |$)' 2>/dev/null || true
 pkill -9 -f '^/tmp/xuanarmor-hub( |$)' 2>/dev/null || true

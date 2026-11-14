@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Query, Request, State},
+    extract::{ConnectInfo, DefaultBodyLimit, Query, Request, State},
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{sse::Event, Html, IntoResponse, Response, Sse},
@@ -83,8 +83,12 @@ async fn request_logger(
 }
 
 /// Body size limiting middleware: rejects requests with body > 1 MiB.
+/// 请求体硬上限（1 MiB）。中间件只能拦截带 Content-Length 的请求，
+/// chunked 请求由 Router 上的 [`DefaultBodyLimit`] 兜底。
+pub const MAX_REQUEST_BODY: usize = 1_048_576;
+
 async fn body_size_limit(request: Request, next: Next) -> Response {
-    const MAX_BODY: u64 = 1_048_576; // 1 MiB
+    const MAX_BODY: u64 = MAX_REQUEST_BODY as u64;
     if let Some(len) = request
         .headers()
         .get(header::CONTENT_LENGTH)
@@ -290,6 +294,8 @@ pub async fn run(
         .route("/login", get(login_handler))
         .route("/blocked", get(blocked_handler))
         .route("/api/auth/login", post(login_api_handler))
+        // 登录接口同样限制请求体（登录 JSON 很小，1 MiB 足够）
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         .layer(middleware::from_fn(request_logger))
         .with_state(state.clone());
 
@@ -347,6 +353,8 @@ pub async fn run(
         .route("/api/hub/proxy/policies", get(hub_proxy_policies_handler))
         .route("/metrics", get(metrics_handler))
         .merge(crate::apictl::router())
+        // 兜底限制请求体（chunked 请求没有 Content-Length，靠 extractor 层拦截）
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY))
         // gzip 必须在最内层：先压缩响应体，再交给日志与认证中间件。
         .layer(middleware::from_fn(gzip_response))
         .layer(middleware::from_fn(body_size_limit))
@@ -522,6 +530,7 @@ const BLOCKED_HTML: &str = include_str!("blocked.html");
 /// 安全响应头：控制台是内部管理面，禁止被第三方站点内嵌/嗅探。
 async fn security_headers(request: Request, next: Next) -> Response {
     let secure = request_is_https(request.headers());
+    let is_api = request.uri().path().starts_with("/api/");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -533,6 +542,20 @@ async fn security_headers(request: Request, next: Next) -> Response {
         "referrer-policy",
         header::HeaderValue::from_static("no-referrer"),
     );
+    // CSP：控制台是单文件内联脚本/样式，只能放开 inline；其余收紧到同源。
+    headers.insert(
+        "content-security-policy",
+        header::HeaderValue::from_static(
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+        ),
+    );
+    // API 响应（含统计/审计/规则）禁止浏览器/中间层缓存。
+    if is_api {
+        headers.insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("no-store"),
+        );
+    }
     if secure {
         headers.insert(
             "strict-transport-security",
@@ -587,7 +610,7 @@ async fn login_api_handler(
     headers: axum::http::HeaderMap,
     Json(req): Json<LoginReq>,
 ) -> Response {
-    let ip = addr.ip();
+    let ip = login_client_ip(addr, &headers);
     if let Err(msg) = state.login_limiter.check(ip) {
         return api_err_response(StatusCode::TOO_MANY_REQUESTS, msg);
     }
@@ -681,6 +704,28 @@ async fn audit_verify_handler(
     let report = crate::audit::verify_chain(std::path::Path::new(&rt.audit_path))
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     Ok(Json(serde_json::to_value(report).unwrap_or_default()))
+}
+
+/// 登录限流使用的来源 IP。
+///
+/// 反向代理部署时 `ConnectInfo` 永远是代理地址（通常是 127.0.0.1），若直接按它限流，
+/// 任意攻击者失败 5 次就能把整个控制台锁 5 分钟。这里仅在直连对端是回环地址时
+/// 才采信 `X-Forwarded-For` / `X-Real-IP`（直连客户端无法伪造回环地址），其余情况用真实 socket 地址。
+fn login_client_ip(
+    addr: std::net::SocketAddr,
+    headers: &axum::http::HeaderMap,
+) -> std::net::IpAddr {
+    if !addr.ip().is_loopback() {
+        return addr.ip();
+    }
+    let header_ip = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|v| v.trim())
+        .or_else(|| headers.get("x-real-ip").and_then(|v| v.to_str().ok()))
+        .and_then(|v| v.parse::<std::net::IpAddr>().ok());
+    header_ip.unwrap_or_else(|| addr.ip())
 }
 
 /// 退出登录：清除 HttpOnly 会话 Cookie。
@@ -1069,7 +1114,11 @@ async fn list_blacklist_handler(
         rows
     };
     // 按创建时间倒序、同时间按 IP，保证 offset 翻页顺序稳定（LRU map 遍历顺序不稳定）。
-    rows.sort_by(|a, b| b.first_seen_ns.cmp(&a.first_seen_ns).then_with(|| a.ip.cmp(&b.ip)));
+    rows.sort_by(|a, b| {
+        b.first_seen_ns
+            .cmp(&a.first_seen_ns)
+            .then_with(|| a.ip.cmp(&b.ip))
+    });
     let total = rows.len();
     let matched: Vec<serde_json::Value> = rows
         .into_iter()

@@ -5,6 +5,8 @@ use std::time::{Duration, Instant};
 
 /// 最大允许连续失败次数。
 const MAX_ATTEMPTS: usize = 5;
+/// 内存中的 IP 记录上限：超过后清理已过期/无锁定的记录，避免大量源 IP 撑大 HashMap。
+const MAX_TRACKED_IPS: usize = 4096;
 /// 失败计数窗口时长。
 const WINDOW: Duration = Duration::from_secs(60);
 /// 触发锁定后的封禁时长。
@@ -29,9 +31,25 @@ impl LoginLimiter {
 
     /// 检查该 IP 当前是否允许尝试登录。
     /// 若已被锁定或本次失败后将达到阈值，返回错误信息。
+    /// 清理过期条目，保持记录表有界（在 check/record_failure 入口调用）。
+    fn prune(&self, guard: &mut HashMap<IpAddr, AttemptEntry>, now: Instant) {
+        if guard.len() <= MAX_TRACKED_IPS {
+            return;
+        }
+        guard.retain(|_, entry| {
+            let locked = entry.locked_until.map(|until| until > now).unwrap_or(false);
+            locked
+                || entry
+                    .attempts
+                    .iter()
+                    .any(|t| now.duration_since(*t) < WINDOW)
+        });
+    }
+
     pub fn check(&self, ip: IpAddr) -> Result<(), &'static str> {
         let now = Instant::now();
         let mut guard = self.inner.lock().unwrap();
+        self.prune(&mut guard, now);
         let entry = guard.entry(ip).or_insert_with(|| AttemptEntry {
             attempts: Vec::new(),
             locked_until: None,
@@ -62,6 +80,7 @@ impl LoginLimiter {
     pub fn record_failure(&self, ip: IpAddr) {
         let now = Instant::now();
         let mut guard = self.inner.lock().unwrap();
+        self.prune(&mut guard, now);
         let entry = guard.entry(ip).or_insert_with(|| AttemptEntry {
             attempts: Vec::new(),
             locked_until: None,

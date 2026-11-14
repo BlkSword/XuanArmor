@@ -37,6 +37,23 @@
 - 审计页 SSE 连接建立后未消费消息，实时推送标记名不副实。
 - 长时间停留在 24h 视图时每 3 秒拉取全量时序导致的浏览器卡顿与内网带宽占用。
 - `/api/audit` 的 `limit` 未做上限约束（此前可一次拉满 1 万条）。
+- `/api/packets` 的 `action` 语义前后端不一致（数据面 0/1 vs 前端 1/2）：PASS 记录被显示为
+  DROP，服务端过滤方向相反；现统一为 **1=DROP / 2=PASS**（含 `/api/ip-detail` 统计）。
+- `/api/attack-events` 的 `truncated` 在 `offset > 0` 时恒为 `true`。
+- 黑名单分页每翻一页都为全表构造 JSON；改为轻量行过滤排序、只为当前页构造 JSON。
+- 包日志 offset 翻页在环形缓冲持续写入时重复/漏条；新增 `before_ns` 游标，控制台改用游标翻页。
+- map 水位告警对大容量 map 永不触发（`entries` 被采样上限截断后比例达不到 80%）；
+  达到采样上限时也告警。
+- 审计 SSE 断线后不再重连；改为 3s→30s 指数退避重连。
+- Dockerfile 仍引用旧名 `eshield` 与旧版 bpf-linker 资产（`.tar.gz`），镜像无法构建；已修复。
+
+### 变更（安全加固）
+
+- 安全响应头新增 `Content-Security-Policy`（控制台为单文件内联资源，仅放开 inline），
+  `/api/*` 响应统一 `Cache-Control: no-store`。
+- 请求体 1 MiB 上限对 chunked 请求同样生效（Router `DefaultBodyLimit`，此前中间件只看
+  `Content-Length`）。
+- 幂等缓存上限 1024 条、登录限流记录上限 4096 个 IP，避免长期运行下内存无界增长。
 
 ### 已知边界
 

@@ -166,7 +166,11 @@ impl PacketLog {
     /// v0.5.4：过滤在锁内直接完成，只克隆命中项，避免每页请求先复制整表
     /// （5 万条 ≈ 7 MB）再过滤；只有带 `ip` 过滤时才做 IP 字符串格式化。
     fn filtered_snapshot(&self, opts: &PacketLogQuery) -> Vec<PacketSample> {
-        let ip_filter = opts.ip.as_deref().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
+        let ip_filter = opts
+            .ip
+            .as_deref()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty());
         let entries = self.entries.lock().unwrap();
         entries
             .iter()
