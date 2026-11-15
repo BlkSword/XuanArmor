@@ -70,7 +70,10 @@
 主要模块：
 
 - `main.rs`：CLI（`start` / `status` / `block` / `unblock` / `reload` / `check` / `tui` /
-  `reset-token` / `upgrade` / `detach`）与守护进程启动流程；`--version` 打印版本。
+  `reset-token` / `upgrade` / `detach` / `tune`）与守护进程启动流程；`--version` 打印版本。
+- `tune.rs`：内核收包调优（v0.5.4）。按 XDP 模式选择策略：generic 用 RPS/RFS +
+  NAPI 预算，native 用网卡中断亲和性 + NAPI 预算；原值写入 `<store_path 目录>/tune-state.json`，
+  `--revert` 完整还原，`--dry-run` 只打印计划。
 - `config.rs`：`/etc/xuanarmor/config.toml` 的解析、默认值与校验。
 - `control.rs`：封装所有 eBPF Map 操作、配置热加载、持久化规则恢复。
 - `state.rs`：内存中的统计状态（PPS/DPS、Top 攻击源、Trust Score 分布等）。

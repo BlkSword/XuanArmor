@@ -47,6 +47,15 @@
 - 审计 SSE 断线后不再重连；改为 3s→30s 指数退避重连。
 - Dockerfile 仍引用旧名 `eshield` 与旧版 bpf-linker 资产（`.tar.gz`），镜像无法构建；已修复。
 
+### 新增（内核收包调优）
+
+- **`xuanarmor tune`**：按当前 XDP 挂载模式自动选择调优策略——
+  - `generic`（SKB 模式）：RPS 把每个 RX 队列的软中断分摊到全部在线 CPU、RFS 流表
+    （`rps_flow_cnt` + `net.core.rps_sock_flow_entries`）、NAPI 预算与 backlog；
+  - `native`（DRV 模式）：网卡 RX 队列中断亲和性（按队列轮转绑核）、NAPI 预算与 backlog。
+  - 支持 `--dry-run`（只打印计划）、`--revert`（按状态文件完整还原）、`--json`；
+    原值写入 `<store_path 目录>/tune-state.json`。调优为运行期设置，重启后失效。
+
 ### 变更（安全加固）
 
 - 安全响应头新增 `Content-Security-Policy`（控制台为单文件内联资源，仅放开 inline），

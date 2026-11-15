@@ -477,6 +477,36 @@ sudo tar czf xuanarmor-hub-backup.tar.gz /var/lib/xuanarmor-hub
 
 > Hub 是单实例有状态服务，不是高可用组件：请定期备份，并在变更/升级前先备份。
 
+## 内核收包调优（`xuanarmor tune`）
+
+XDP 两种挂载模式的瓶颈不同，`tune` 会按当前模式自动选择调优项：
+
+| 模式 | 瓶颈 | 调优项 |
+|---|---|---|
+| `generic`（SKB） | 单核软中断 | RPS（每 RX 队列分摊到全部 CPU）、RFS（流表 + 全局 `rps_sock_flow_entries`）、NAPI 预算/backlog |
+| `native`（DRV） | 单队列中断处理 | 网卡 RX 队列中断亲和性（按队列轮转绑核）、NAPI 预算/backlog |
+
+```bash
+# 查看计划（不写入）
+sudo xuanarmor tune --dry-run
+
+# 应用（原值写入 <store_path 目录>/tune-state.json）
+sudo xuanarmor tune
+
+# 完整还原
+sudo xuanarmor tune --revert
+
+# 指定网卡 / JSON 输出（便于自动化）
+sudo xuanarmor tune --interface eth0 --json
+```
+
+说明：
+
+- 需要 root（写 `/sys/class/net/*/queues/*`、`/proc/irq/*`、`/proc/sys/net/core/*`）；
+- 调优是**运行期**设置，重启后失效；需要持久化请把命令加入开机脚本或 systemd `ExecStartPost`；
+- `--revert` 依赖状态文件，删除该文件后无法自动还原；
+- 未检测到 XDP 挂载时会直接报错，避免在错误网卡上改参数。
+
 ## 安装脚本（直连 / 加速）
 
 - `scripts/install.sh`：直连 GitHub 下载，适合海外网络。

@@ -22,6 +22,7 @@ mod threat_intel;
 mod time;
 mod timeseries;
 mod tui;
+mod tune;
 mod upgrade;
 mod version_check;
 mod web;
@@ -180,6 +181,24 @@ enum Commands {
         #[arg(short, long, default_value = "/etc/xuanarmor/config.toml")]
         config: String,
     },
+    /// 按 XDP 模式应用内核收包调优（generic: RPS/RFS；native: 中断亲和性）
+    Tune {
+        /// 配置文件路径
+        #[arg(short, long, default_value = "/etc/xuanarmor/config.toml")]
+        config: String,
+        /// 覆盖配置中的网卡名
+        #[arg(long)]
+        interface: Option<String>,
+        /// 只打印计划，不写入
+        #[arg(long)]
+        dry_run: bool,
+        /// 还原上次调优（读取状态文件）
+        #[arg(long)]
+        revert: bool,
+        /// 以 JSON 输出
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -240,6 +259,19 @@ async fn main() -> anyhow::Result<()> {
                 None => upgrade::run(opts),
             }
         }
+        Commands::Tune {
+            config,
+            interface,
+            dry_run,
+            revert,
+            json,
+        } => tune::run(tune::TuneOptions {
+            config,
+            interface,
+            dry_run,
+            revert,
+            json,
+        }),
         Commands::Detach { config } => {
             let cfg = Config::from_file(&config)?;
             if xdp_link::detach_pinned(&cfg)? {
