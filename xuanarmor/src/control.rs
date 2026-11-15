@@ -483,6 +483,15 @@ impl ControlState {
             }
             _ => anyhow::bail!("unknown IP family"),
         }
+        drop(guard);
+        // 同步内存视图：/api/whitelist 读取的是 self.whitelist，
+        // 旧实现只写 eBPF map 不更新这里，导致 API 添加的白名单在列表里看不到。
+        {
+            let mut list = self.whitelist.lock().await;
+            if !list.contains(&(key, prefix)) {
+                list.push((key, prefix));
+            }
+        }
         Ok(())
     }
 
