@@ -45,6 +45,9 @@
 - map 水位告警对大容量 map 永不触发（`entries` 被采样上限截断后比例达不到 80%）；
   达到采样上限时也告警。
 - 审计 SSE 断线后不再重连；改为 3s→30s 指数退避重连。
+- **systemd 下 `reset-token` 无法写回配置**：`ProtectSystem=strict` 使 `/etc` 只读，
+  重置后日志告警 "Read-only file system"，重启回退旧 Token。已把 `/etc/xuanarmor`
+  加入 `ReadWritePaths`（仅该目录，不放开整个 `/etc`）。
 - Dockerfile 仍引用旧名 `eshield` 与旧版 bpf-linker 资产（`.tar.gz`），镜像无法构建；已修复。
 
 ### 新增（内核收包调优）
