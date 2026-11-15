@@ -514,8 +514,8 @@ sudo xuanarmor tune --interface eth0 --json
 
 ```bash
 # 直连
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.3
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.4
 
 # 加速（脚本与发布产物都走加速站）
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install-cn.sh | sudo bash -s -- --version 0.5.3
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install-cn.sh | sudo bash -s -- --version 0.5.4
 ```

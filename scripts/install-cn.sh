@@ -77,7 +77,7 @@ REPO="${XUANARMOR_REPO:-${ESHIELD_REPO:-BlkSword/XuanArmor}}"
 GH_PROXY="${XUANARMOR_GH_PROXY:-${GH_PROXY:-https://gh-proxy.org/}}"
 GH_PROXY="${GH_PROXY%/}/"
 # 优先从环境变量读取版本；未设置时依次尝试 workspace / xuanarmor crate 的 Cargo.toml；最后回退到默认版本。
-DEFAULT_VERSION="0.5.3"
+DEFAULT_VERSION="0.5.4"
 if [ -z "${VERSION:-}" ]; then
     if [ -f "Cargo.toml" ] && grep -qE '^\[workspace\]' Cargo.toml 2>/dev/null; then
         # workspace 根 Cargo.toml 不含 version，版本在 xuanarmor/Cargo.toml
@@ -172,12 +172,33 @@ else
     info "BTF 支持: 已启用"
 fi
 
-# 5. XDP 支持检查（通过检查是否有网卡已挂载 XDP 推断）
-if ip link show 2>/dev/null | grep -q "xdp"; then
-    info "XDP 支持: 已可用（检测到现有 XDP 挂载）"
-else
-    info "XDP 支持: 内核已识别（需网卡驱动支持 native mode）"
-fi
+# 5. XDP 模式预检（v0.5.4）：判断该网卡能否 native，提前告知性能预期
+#    判据：virtio_net 在宿主机固定实现 GRO_HW/CSUM 时会拒绝 native XDP，
+#    guest 侧表现为 `rx-gro-hw: on [fixed]`，此时只能 generic。
+XDP_EXPECT="unknown"
+XDP_REASON=""
+XDP_QUEUES=""
+probe_xdp_mode() {
+    local iface="$1"
+    command -v ethtool >/dev/null 2>&1 || { XDP_EXPECT="unknown"; XDP_REASON="未安装 ethtool"; return; }
+    local driver gro csum
+    driver=$(ethtool -i "$iface" 2>/dev/null | awk -F': ' '/^driver:/{print $2}')
+    gro=$(ethtool -k "$iface" 2>/dev/null | grep -E '^rx-gro-hw:' | head -1)
+    csum=$(ethtool -k "$iface" 2>/dev/null | grep -E '^rx-checksumming:' | head -1)
+    XDP_QUEUES=$(ip -d link show dev "$iface" 2>/dev/null | grep -oE 'numrxqueues [0-9]+' | awk '{print $2}')
+    if echo "$gro" | grep -q '\[fixed\]'; then
+        XDP_EXPECT="generic"
+        XDP_REASON="宿主机固定开启 GRO_HW/CSUM（${gro#rx-gro-hw: }），guest 侧无法关闭"
+    elif [ -n "$gro" ]; then
+        XDP_EXPECT="native"
+        XDP_REASON="卸载项可调整（${gro#rx-gro-hw: }），native 可用"
+    else
+        XDP_EXPECT="unknown"
+        XDP_REASON="无法读取卸载项（驱动 ${driver:-unknown}）"
+    fi
+    [ -n "$driver" ] && XDP_REASON="$XDP_REASON；驱动 $driver"
+    [ -n "$XDP_QUEUES" ] && XDP_REASON="$XDP_REASON；RX 队列 $XDP_QUEUES"
+}
 
 # 6. 网卡自动检测
 DEFAULT_IFACE="eth0"
@@ -190,6 +211,24 @@ else
     warn "  可用网卡列表:"
     ip -o link show 2>/dev/null | grep -v "lo:" | awk '{print "    " $2}' || true
 fi
+
+# 6.1 XDP 模式预检（依赖已确定的网卡名）
+probe_xdp_mode "$DEFAULT_IFACE"
+case "$XDP_EXPECT" in
+    native)
+        info "XDP 模式预检: 预计 native（完整性能）"
+        info "  $XDP_REASON"
+        ;;
+    generic)
+        warn "XDP 模式预检: 只能 generic（SKB 模式，性能约为 native 的 1/3）"
+        warn "  $XDP_REASON"
+        warn "  这是宿主机虚拟化限制，guest 内无法绕过；安装后可用 'xuanarmor tune' 做 RPS/RFS 调优"
+        warn "  如需 native，请换用 rx-gro-hw 不带 [fixed] 的实例/宿主机"
+        ;;
+    *)
+        info "XDP 模式预检: 未知（$XDP_REASON）"
+        ;;
+esac
 
 # 7. 内存检查
 TOTAL_MEM=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo 0)
@@ -688,6 +727,17 @@ else
         done
         if [ "$READY_OK" = "1" ]; then
             info "服务健康检查通过（/ready=200，XDP 已挂载）"
+            # v0.5.4：读取实际挂载模式，generic 时给出性能提示与调优建议
+            ACTUAL_MODE=$(journalctl -u xuanarmor -n 200 --no-pager 2>/dev/null \
+                | grep -oE 'attached XDP in (native|generic) mode' | tail -1 \
+                | grep -oE '(native|generic)' || true)
+            if [ "$ACTUAL_MODE" = "generic" ]; then
+                warn "XDP 实际挂载模式: generic（SKB 模式）"
+                warn "  性能约为 native 的 1/3；可执行 'sudo xuanarmor tune' 启用 RPS/RFS 调优"
+                warn "  查看原因: sudo journalctl -u xuanarmor -n 50 | grep -i 'native XDP'"
+            elif [ "$ACTUAL_MODE" = "native" ]; then
+                info "XDP 实际挂载模式: native（完整性能）"
+            fi
         else
             warn "服务未在 30 秒内就绪，请检查配置与日志："
             warn "  sudo journalctl -u xuanarmor -n 50 --no-pager"

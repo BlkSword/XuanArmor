@@ -394,12 +394,21 @@ async fn persist_runtime_tokens(
     }
 }
 
-fn generate_token() -> String {
-    format!(
-        "{:032x}{:032x}",
-        rand::random::<u128>(),
-        rand::random::<u128>()
-    )
+/// 控制台 Token 长度（十六进制字符数）。
+///
+/// v0.5.4 起从 64 位缩短到 12 位：便于人工抄录/输入，熵为 48 bit
+/// （约 2.8e14 组合）。配合登录限流（5 次失败锁定 5 分钟）与
+/// 仅本机/内网暴露的控制台，暴力枚举不可行。
+pub const TOKEN_LEN: usize = 12;
+
+/// 生成随机 Token（`TOKEN_LEN` 位十六进制）。
+pub fn generate_token() -> String {
+    let mut out = String::with_capacity(TOKEN_LEN);
+    while out.len() < TOKEN_LEN {
+        out.push_str(&format!("{:016x}", rand::random::<u64>()));
+    }
+    out.truncate(TOKEN_LEN);
+    out
 }
 
 fn constant_time_eq(a: &str, b: &str) -> bool {

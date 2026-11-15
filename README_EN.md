@@ -220,8 +220,8 @@ Upgrade, rollback, and uninstall (v0.5.0):
 
 ```bash
 # Upgrade to a specific version; the current install is backed up first
-sudo bash scripts/install.sh --version 0.5.0
-sudo bash scripts/install.sh --version 0.5.0 --sha256 <official-sha256>
+sudo bash scripts/install.sh --version 0.5.4
+sudo bash scripts/install.sh --version 0.5.4 --sha256 <official-sha256>
 
 # Roll back to the latest backup (or a specific backup directory)
 sudo bash scripts/install.sh --rollback

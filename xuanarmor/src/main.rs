@@ -554,7 +554,7 @@ async fn start(config_path: &str) -> anyhow::Result<()> {
     let api_token = match config.api_token.clone().filter(|t| !t.is_empty()) {
         Some(token) => Some(token),
         None => {
-            let token = format!("{:032x}", rand::random::<u128>());
+            let token = auth::generate_token();
             match crate::config::Config::persist_api_token(config_path, &token) {
                 Ok(()) => info!("api_token 未配置：已生成控制台密码并写入 {}", config_path),
                 Err(e) => warn!("api_token 未配置且写回配置失败（{e:#}）；本次运行使用临时密码"),

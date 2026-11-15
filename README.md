@@ -42,14 +42,14 @@ curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/ins
 
 ```bash
 # 直连版
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.3
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.4
 
 # 加速版（国内推荐；脚本本身也经加速站下载）
-curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install-cn.sh | sudo bash -s -- --version 0.5.3
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install-cn.sh | sudo bash -s -- --version 0.5.4
 ```
 
 加速站前缀可用 `XUANARMOR_GH_PROXY` 覆盖，例如
-`sudo XUANARMOR_GH_PROXY=https://gh-proxy.org/ bash install-cn.sh --version 0.5.3`。
+`sudo XUANARMOR_GH_PROXY=https://gh-proxy.org/ bash install-cn.sh --version 0.5.4`。
 
 
 ## 控制台预览
@@ -250,8 +250,8 @@ sudo bash scripts/install.sh --build
 sudo xuanarmor upgrade --binary /path/to/new/xuanarmor --config /etc/xuanarmor/config.toml
 
 # 升级到指定版本；升级前自动备份到 /var/lib/xuanarmor/backup/<时间戳>/
-sudo bash scripts/install.sh --version 0.5.1
-sudo bash scripts/install.sh --version 0.5.1 --sha256 <官方 SHA256>
+sudo bash scripts/install.sh --version 0.5.4
+sudo bash scripts/install.sh --version 0.5.4 --sha256 <官方 SHA256>
 
 # 回滚到最近一次备份（或指定备份目录）
 sudo bash scripts/install.sh --rollback

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 控制台大数量统计治理（性能与上限）
+## 0.5.4 (2026-11-15) — 控制台大数据量治理、内核调优与安装体验
 
 > 大规模攻击（黑名单逼近 10 万条、24h 趋势窗口、事件/审计列表）下控制台不再卡死；
 > REST API 有新增分页参数与响应字段（向后兼容：旧字段保留）。
@@ -55,6 +55,21 @@
   - `native`（DRV 模式）：网卡 RX 队列中断亲和性（按队列轮转绑核）、NAPI 预算与 backlog。
   - 支持 `--dry-run`（只打印计划）、`--revert`（按状态文件完整还原）、`--json`；
     原值写入 `<store_path 目录>/tune-state.json`。调优为运行期设置，重启后失效。
+
+### 新增（安装与运维体验）
+
+- **安装脚本主动检测 XDP 模式**：安装前读取 `ethtool -i/-k` 与 `numrxqueues`，判断该网卡
+  能否 native；`rx-gro-hw` 带 `[fixed]` 时明确提示"只能 generic（性能约为 native 的 1/3）"
+  并给出换实例 / `xuanarmor tune` 建议。安装后从 journald 读取实际挂载模式再次确认。
+- **`xuanarmor tune`**：按 XDP 模式自动调优内核收包参数——generic 用 RPS/RFS + NAPI 预算，
+  native 用网卡中断亲和性 + NAPI 预算；支持 `--dry-run` / `--revert` / `--json`，
+  原值写入 `<store_path 目录>/tune-state.json`。实测单队列 generic 机器 +14.4% dropped pps。
+
+### 变更（Token 长度）
+
+- 控制台 Token 从 64 位十六进制缩短为 **12 位**（48 bit 熵），便于人工抄录；
+  配合登录限流（5 次失败锁定 5 分钟）与内网/本机暴露面，暴力枚举不可行。
+  已有 Token 不受影响（长度不校验），仅新生成/重置的 Token 为 12 位。
 
 ### 变更（安全加固）
 
