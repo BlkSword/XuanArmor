@@ -62,6 +62,8 @@ struct PacketCtx<'a> {
     /// 包日志开关与采样率缓存：避免每次 DROP 采样都读一次 CONFIG map。
     packet_log_enabled: u8,
     packet_log_sample_rate: u16,
+    /// Trust Score 开关缓存：关闭时热路径完全不碰 TRUST_MAP（默认关闭）。
+    trust_enabled: u8,
 }
 
 #[xdp]
@@ -96,6 +98,7 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
         project_flags: PROJECT_FLAGS_ALL,
         packet_log_enabled: 0,
         packet_log_sample_rate: 0,
+        trust_enabled: 0,
     };
 
     match unsafe { (*eth).proto } {
@@ -140,10 +143,11 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
     pc.trust_sub_divisor = runtime.trust_sub_divisor.max(1);
     pc.packet_log_enabled = runtime.packet_log_enabled;
     pc.packet_log_sample_rate = runtime.packet_log_sample_rate;
+    pc.trust_enabled = runtime.trust_enabled;
 
     if is_whitelisted(&src_key) {
         unsafe { with_stats(|s| s.total_passed += 1) };
-        trust_pass_sampled(&src_key, pc.now_ns, pc.trust_add_divisor);
+        trust_pass_sampled(&src_key, pc.now_ns, pc.trust_add_divisor, pc.trust_enabled);
         return xdp_action::XDP_PASS;
     }
 
@@ -262,14 +266,18 @@ fn try_xuanarmor(ctx: &XdpContext) -> u32 {
     }
 
     unsafe { with_stats(|s| s.total_passed += 1) };
-    trust_pass_sampled(&src_key, pc.now_ns, pc.trust_add_divisor);
+    trust_pass_sampled(&src_key, pc.now_ns, pc.trust_add_divisor, pc.trust_enabled);
     xdp_action::XDP_PASS
 }
 
 /// PASS 信任更新采样：每 64 个 PASS 写一次 TRUST_MAP，按 64 倍权重补偿。
 /// 攻击/正常混合流量下显著降低 per-packet map 写放大。
 #[inline(never)]
-fn trust_pass_sampled(src: &IpKey, now_ns: u64, add_divisor: u32) {
+fn trust_pass_sampled(src: &IpKey, now_ns: u64, add_divisor: u32, trust_enabled: u8) {
+    // Trust Score 关闭时 TRUST_MAP 不参与任何判定，跳过采样计数与写入。
+    if trust_enabled == 0 {
+        return;
+    }
     let mut due = false;
     unsafe {
         with_stats(|s| {
@@ -305,7 +313,10 @@ fn drop_packet(pc: &PacketCtx) -> u32 {
             due = s.top_attacker_sample & 0xf == 0;
         });
     }
-    trust::trust_drop(pc.src, pc.now_ns, pc.trust_sub_divisor);
+    // Trust Score 关闭时跳过 TRUST_MAP 读改写（默认关闭，攻击期每包省一次 map 查找）。
+    if pc.trust_enabled != 0 {
+        trust::trust_drop(pc.src, pc.now_ns, pc.trust_sub_divisor);
+    }
     if due {
         let prev = unsafe { TOP_ATTACKERS.get(pc.src) }.unwrap_or(&0);
         let next = prev.saturating_add(if sampled { 16 } else { 1 });
@@ -461,7 +472,7 @@ fn check_project_policy(pc: &mut PacketCtx) -> u32 {
         project_action::PASS => {
             pc.rule_id = rules::PROJECT_POLICY;
             unsafe { with_stats(|s| s.total_passed += 1) };
-            trust_pass_sampled(pc.src, pc.now_ns, pc.trust_add_divisor);
+            trust_pass_sampled(pc.src, pc.now_ns, pc.trust_add_divisor, pc.trust_enabled);
             xdp_action::XDP_PASS
         }
         project_action::DROP => {
@@ -589,7 +600,7 @@ fn check_tcp_drop(pc: &mut PacketCtx, syn_proxy_enabled: u8, port_rate_enabled: 
         let action = syn_cookie::handle_ack(&pcr, ip_ptr, tcp_ptr);
         if action != NO_ACTION {
             unsafe { with_stats(|s| s.total_passed += 1) };
-            trust_pass_sampled(pc.src, pc.now_ns, pc.trust_add_divisor);
+            trust_pass_sampled(pc.src, pc.now_ns, pc.trust_add_divisor, pc.trust_enabled);
             return action;
         }
         // 兜底：该源已进入挑战态，但当前包头不支持 Cookie 挑战

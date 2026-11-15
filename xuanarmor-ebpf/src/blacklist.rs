@@ -1,4 +1,4 @@
-use crate::maps::{BLACKLIST, GLOBAL_STATS, TRUST_MAP};
+use crate::maps::{BLACKLIST, CONFIG, GLOBAL_STATS, TRUST_MAP};
 use xuanarmor_common::pure::merge_block_entry;
 use xuanarmor_common::{IpKey, TrustEntry, BLOCK_PERMANENT, TRUST_DEFAULT, TRUST_MIN};
 
@@ -89,18 +89,33 @@ pub fn add_to_blacklist(src: &IpKey, now_ns: u64, block_duration_s: u64, reason:
     let _ = BLACKLIST.insert(src, &entry, 0);
     bump_blacklist_gen();
 
-    // Trust Score 归零：一旦被判定为攻击源，之前积累的信任全部作废
-    let trust_entry = TrustEntry {
-        trust_score: TRUST_MIN,
-        last_update_ns: now_ns,
-        ..TrustEntry::default()
-    };
-    let _ = TRUST_MAP.insert(src, &trust_entry, 0);
+    // Trust Score 归零：一旦被判定为攻击源，之前积累的信任全部作废。
+    // Trust Score 关闭时 TRUST_MAP 不参与判定，跳过写入（加黑本身已生效）。
+    if trust_enabled() {
+        let trust_entry = TrustEntry {
+            trust_score: TRUST_MIN,
+            last_update_ns: now_ns,
+            ..TrustEntry::default()
+        };
+        let _ = TRUST_MAP.insert(src, &trust_entry, 0);
+    }
+}
+
+/// Trust Score 是否启用（读 CONFIG；仅在加黑/过期等低频路径调用）。
+#[inline(always)]
+fn trust_enabled() -> bool {
+    match CONFIG.get(0) {
+        Some(c) => c.trust_enabled != 0,
+        None => false,
+    }
 }
 
 /// 黑名单过期后，将 Trust Score 重置回默认中性值（给予重新观察的机会）。
 #[inline(always)]
 fn reset_trust(src: &IpKey) {
+    if !trust_enabled() {
+        return;
+    }
     let entry = TrustEntry {
         trust_score: TRUST_DEFAULT,
         ..TrustEntry::default()
