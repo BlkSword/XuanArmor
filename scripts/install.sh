@@ -683,7 +683,8 @@ LimitNOFILE=1048576
 LimitMEMLOCK=infinity
 StateDirectory=xuanarmor
 LogsDirectory=xuanarmor
-ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf
+# /etc/xuanarmor 需要可写：reset-token 会把新 Token 写回 config.toml
+ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf /etc/xuanarmor
 CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK CAP_SYS_ADMIN
 NoNewPrivileges=true

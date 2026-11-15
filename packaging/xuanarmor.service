@@ -17,7 +17,9 @@ CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_NET_RAW CAP_PERFMON CAP_IPC_LOCK
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf
+# /etc/xuanarmor 需要可写：reset-token 会把新 Token 写回 config.toml，
+# ProtectSystem=strict 下 /etc 默认只读，不放开会导致重置后重启回退旧 Token。
+ReadWritePaths=/var/lib/xuanarmor /var/log/xuanarmor /sys/fs/bpf /run/xuanarmor-bpf /etc/xuanarmor
 # 自动创建数据/日志目录（systemd >= 235），避免 ReadWritePaths 指向不存在的路径
 StateDirectory=xuanarmor
 LogsDirectory=xuanarmor
