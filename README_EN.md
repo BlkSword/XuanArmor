@@ -76,6 +76,10 @@ Requirements: Linux kernel >= 5.10 with BTF, root privileges; >= 512MB RAM recom
 
 ## 1. Overview
 
+> **v0.5.4 (2026-11-15)**: console big-data governance (server-side pagination, gzip, downsampling,
+> map-watermark alerts), new `xuanarmor tune` kernel receive-path tuning, installer-side XDP mode
+> pre-check, and console tokens shortened to 12 characters.
+>
 > **v0.5.2 (2026-10-31)**: seamless upgrade. The XDP program is attached as a BPF link pinned to bpffs, so it keeps
 > filtering while the process restarts; the new process replaces it atomically, with no data-plane gap.
 > Adds `xuanarmor upgrade` (backup, health check, automatic rollback), `xuanarmor detach`, SO_REUSEPORT web listener
@@ -131,7 +135,7 @@ Components:
 | Capability | Description |
 |---|---|
 | Web console | Vue 3 + TypeScript single-file SPA (`console/`), follows system light/dark theme, command palette, high-density tables. |
-| CLI and TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token`. |
+| CLI and TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach/tune`. |
 | Configuration reload | Reload through `SIGHUP` or `systemctl reload` without restarting XDP. |
 | Authentication and RBAC-lite | Optional Bearer token; v0.5.0 adds a read-only token (GET/HEAD only); loopback requests bypass token validation. |
 | Persistence | Dynamic rules and time-series metrics are stored in redb and restored after restart. |
@@ -141,6 +145,8 @@ Components:
 | Alerting | Webhook alerts with threshold and cooldown configuration. |
 | Distributed policy | Hub aggregates policies across nodes; supports master token and per-node tokens. |
 | Kernel compatibility | Pinned `nightly-2026-07-31` and `bpf-linker 0.10.4`; `XUANARMOR_XDP_MODE=skb` for virtual NICs. |
+| XDP mode pre-check | The installer inspects `ethtool -k` to predict whether native XDP is possible; when `rx-gro-hw` is `[fixed]` it warns that only generic is available and sets performance expectations (v0.5.4). |
+| Kernel receive-path tuning | `xuanarmor tune` picks a strategy per attach mode: RPS/RFS for generic, IRQ affinity for native, NAPI budget in both; supports `--dry-run` / `--revert` / `--json` (v0.5.4). |
 
 ## 3. Architecture
 
@@ -398,8 +404,13 @@ xuanarmor tui
 xuanarmor status --endpoint http://xuanarmor-host:8720
 xuanarmor block 192.0.2.1 --endpoint http://xuanarmor-host:8720
 
-# Rotate console token
+# Rotate console token (12 hex chars; written back to config.toml)
 xuanarmor reset-token
+
+# Kernel receive-path tuning: preview, apply, revert
+sudo xuanarmor tune --dry-run
+sudo xuanarmor tune
+sudo xuanarmor tune --revert
 ```
 
 ### 8.2 Authentication and Roles
@@ -410,6 +421,8 @@ xuanarmor reset-token
   `GET /api/auth/check` returns `{"role":"admin"|"readonly"}`. The read-only token is intended for
   monitoring scrapers and read-only dashboards and cannot be used to log into the console.
 - The web console provides a `/login` page that stores the token in a cookie for browser sessions.
+- Console tokens are **12 hex characters** (since v0.5.4; previously 64) for easier manual entry.
+  `xuanarmor reset-token` writes the new token back to the config file, so it survives a restart.
 - Changing `api_token` / `readonly_token` requires a service restart.
 
 ### 8.3 Reload
@@ -418,6 +431,56 @@ xuanarmor reset-token
 sudo systemctl reload xuanarmor
 sudo kill -HUP $(pidof xuanarmor)
 ```
+
+### 8.4 XDP Mode and Kernel Tuning
+
+XuanArmor supports two XDP attach modes with roughly a **3x performance difference**:
+
+| Mode | Execution point | Relative performance |
+|---|---|---|
+| `native` (driver) | NIC driver NAPI context, before `sk_buff` allocation | baseline |
+| `generic` (SKB mode) | After `sk_buff` allocation, generic kernel XDP path | about 1/3 of native |
+
+The installer pre-checks this automatically. To check manually:
+
+```bash
+ethtool -k eth0 | grep -E 'rx-gro-hw|rx-checksumming'
+```
+
+- `rx-gro-hw: on [fixed]` means **generic only**. The host implements GRO_HW/CSUM in a way the
+  guest cannot disable (`ethtool -K eth0 rx-gro-hw off` is rejected); changing the instance type is
+  the only fix.
+- `rx-gro-hw: off`, or `on` without `[fixed]`, means native XDP is available.
+
+For generic mode, `xuanarmor tune` raises throughput. It selects a strategy from the current attach
+mode and records the original values in `<store_path dir>/tune-state.json`, so `--revert` restores
+everything:
+
+```bash
+# Print the plan without changing anything
+sudo xuanarmor tune --dry-run
+
+# Apply (auto-detects generic / native)
+sudo xuanarmor tune
+
+# JSON output for orchestration and audits
+sudo xuanarmor tune --json
+
+# Restore every change (sysctl / RPS / RFS / IRQ affinity)
+sudo xuanarmor tune --revert
+```
+
+| Mode | Knobs |
+|---|---|
+| generic | RPS (`rps_cpus` across all online CPUs), RFS (`rps_flow_cnt`, `net.core.rps_sock_flow_entries`), NAPI budget (`netdev_budget` / `netdev_budget_usecs` / `netdev_max_backlog`) |
+| native | Per-RX-queue IRQ affinity (`/proc/irq/N/smp_affinity_list`), NAPI budget |
+
+Measured on 2 vCPU / single RX queue / generic with four concurrent UDP flooders: dropped pps rose
+from **76,442 to 87,462 (+14.4%)**. The gain grows with queue count and CPU count.
+
+> `tune` only adjusts kernel receive-path parameters; it does not change the attach mode, which is
+> determined by `[xdp].mode` and driver capability. Full methodology and data are in
+> [docs/benchmark.md](docs/benchmark.md).
 
 ## 9. Distributed Hub
 
@@ -559,6 +622,7 @@ Conclusions:
 | Blacklist hit_count | 1/16 sampled write, adding 16 per sampled update. |
 | TOP_ATTACKERS ranking | 1/16 sampled write, adding 16 per sampled update. |
 | Blacklist-hit RingBuf events | Suppressed; counts are covered by global statistics and hit_count. |
+| Trust disabled (default) | All `TRUST_MAP` reads and writes are skipped — no sampling counter on PASS, no score lookup on DROP. |
 
 Detailed methodology and data are available in [docs/benchmark.md](docs/benchmark.md). Measured v0.5.0 per-packet cost, two-machine attack data, memory footprint, and the capacity formula are in [docs/capacity-planning.md](docs/capacity-planning.md).
 
@@ -574,6 +638,27 @@ Detailed methodology and data are available in [docs/benchmark.md](docs/benchmar
 Capacity estimate: `cores ≈ peak pps × per-packet cost (75–92ns) / 0.7` (data-plane lower bound;
 add control-plane and application overhead). A 2 vCPU host should only carry ≤150k pps of
 **recognized** attack traffic; unrecognized traffic requires ≥4 vCPU plus native XDP.
+
+### 11.5 Generic-Mode Combined Attack Measurements (v0.5.4)
+
+Environment: 2 vCPU / 3.6 GB / virtio_net with a **single RX queue** / `rx-gro-hw: on [fixed]`
+→ generic; four 2 vCPU attackers on the same internal network, hping3 with multiple vectors.
+
+| Scenario | total_packets | dropped | passed |
+|---|---:|---:|---:|
+| SYN flood (4 hosts × 10s) | 546,090 | 174,681 | 12,990 |
+| UDP flood (4 hosts × 10s) | 849,640 | 838,154 | 11,486 |
+| ICMP flood (4 hosts × 10s) | 2,542,342 | 2,533,976 | 8,366 |
+| Mixed SYN+UDP+ICMP (4 hosts × 12s) | 954,756 | 786,751 | 10,173 |
+| Mixed all-protocol + large packets (4 hosts × 15s) | 1,244,410 | 1,240,257 | 4,153 |
+| Legitimate HTTP during attack | — | — | **20/20 succeeded, latency 1.1 → 1.2 ms** |
+
+Cumulative: 20,461,657 packets, 19,108,524 dropped (93.4%); the service stayed available and XDP
+stayed attached, and the blocklist only contained the attacking sources (zero false positives).
+Full data and discussion are in [docs/benchmark.md](docs/benchmark.md).
+
+> These numbers reflect a **single-queue, 2 vCPU, generic** configuration and are not the project's
+> performance ceiling; cite the native benchmarks for performance commitments.
 
 
 ## 12. Testing

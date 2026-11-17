@@ -31,7 +31,21 @@ XuanArmor 是基于 eBPF/XDP 的主机级 L3-L4 网络防护系统，用于在 L
 一行命令完成下载、SHA256 校验、安装、systemd 注册与启动：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh 
+curl -fsSL https://raw.githubusercontent.com/BlkSword/XuanArmor/main/scripts/install.sh | sudo bash -s -- --version 0.5.4
+```
+
+安装脚本会先做环境预检，其中包含 **XDP 模式检测**：读取 `ethtool -i` / `ethtool -k` 与
+`numrxqueues`，判断该网卡能否 native。若 `rx-gro-hw` 带 `[fixed]`（云上 virtio_net 常见），
+会提前提示"只能 generic，性能约为 native 的 1/3"，避免装完才发现性能不符预期：
+
+```text
+[WARN] XDP 模式预检: 只能 generic（SKB 模式，性能约为 native 的 1/3）
+[WARN]   宿主机固定开启 GRO_HW/CSUM（on [fixed]），guest 侧无法关闭；驱动 virtio_net；RX 队列 1
+[WARN]   如需 native，请换用 rx-gro-hw 不带 [fixed] 的实例/宿主机
+```
+
+安装完成后还会从 journald 读取**实际**挂载模式再确认一次；generic 时提示用
+`xuanarmor tune` 做 RPS/RFS 调优（见 [8.4 XDP 模式与内核调优](#84-xdp-模式与内核调优)）。
 
 ## 两个安装脚本
 
@@ -98,6 +112,9 @@ curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/BlkSword/XuanA
 
 ## 1. 项目概述
 
+> **v0.5.4（2026-11-15）**：控制台大数据量治理（服务端分页、gzip、降采样、表项水位告警）、
+> 新增 `xuanarmor tune` 内核收包调优、安装脚本主动检测 XDP 模式、控制台 Token 缩短为 12 位。
+>
 > **v0.5.3（2026-11-08）**：邮件告警、Token 管理、版本检测、模块默认值与数据面热路径优化、控制台滚动与深色模式组合标。
 >
 > **v0.5.2（2026-10-31）**：平滑升级。XDP 程序以 BPF link 挂载并 pin 到 bpffs，进程退出后旧程序继续过滤，
@@ -153,7 +170,7 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 | 能力 | 说明 |
 |---|---|
 | Web 控制台 | Vue 3 + TypeScript 单文件 SPA（`console/`），跟随系统亮/暗色，文本导航、命令面板与高密度表格。 |
-| CLI 与 TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach`。 |
+| CLI 与 TUI | `xuanarmor start/status/block/unblock/reload/check/tui/reset-token/upgrade/detach/tune`。 |
 | 配置热加载 | 通过 `SIGHUP` 或 `systemctl reload` 重新加载配置。 |
 | 认证与 RBAC-lite | 可选 Bearer Token；v0.5.0 新增只读 Token（只允许 GET/HEAD），本机回环请求跳过 Token 校验。 |
 | 上游编排 API | `POST /api/policy/apply` 原子下发策略（dry-run、差异返回、`Idempotency-Key` 幂等）、`GET /api/events` 游标与 SSE 推送、`GET /api/version` 能力探测、`GET /api/openapi.json`；详见 [docs/api.md](docs/api.md#上游编排-apiv052)。 |
@@ -166,6 +183,8 @@ XuanArmor 将过滤逻辑部署在网卡驱动层的 XDP 钩子上。数据包�
 | 告警 | 支持 Webhook 告警与阈值、冷却时间配置。 |
 | 分布式策略 | Hub 聚合多节点策略；支持 master token 与每节点 Token。 |
 | 内核兼容 | 固定 `nightly-2026-07-31` 与 `bpf-linker 0.10.4`；支持 `XUANARMOR_XDP_MODE=skb` 规避虚拟网卡原生 XDP 问题。 |
+| XDP 模式预检 | 安装脚本按 `ethtool -k` 判断网卡能否 native；`rx-gro-hw` 带 `[fixed]` 时提示只能 generic 并给出性能预期（v0.5.4）。 |
+| 内核收包调优 | `xuanarmor tune` 按挂载模式自动调优：generic 用 RPS/RFS、native 用中断亲和性，均含 NAPI 预算；支持 `--dry-run`/`--revert`/`--json`（v0.5.4）。 |
 
 ## 3. 系统架构
 
@@ -428,8 +447,13 @@ xuanarmor tui
 xuanarmor status --endpoint http://xuanarmor-host:8720
 xuanarmor block 192.0.2.1 --endpoint http://xuanarmor-host:8720
 
-# 重置控制台 Token
+# 重置控制台 Token（12 位十六进制，会写回 config.toml）
 xuanarmor reset-token
+
+# 内核收包调优：先看计划，再执行，可还原
+sudo xuanarmor tune --dry-run
+sudo xuanarmor tune
+sudo xuanarmor tune --revert
 ```
 
 ### 8.2 认证与角色
@@ -440,6 +464,8 @@ xuanarmor reset-token
   写操作返回 403；`GET /api/auth/check` 返回 `{"role":"admin"|"readonly"}`。
   只读 Token 适合监控抓取与只读大屏，不能用于控制台登录。
 - Web 控制台支持通过 `/login` 页面设置 Cookie，用于浏览器访问。
+- 控制台 Token 为 **12 位十六进制**（v0.5.4 起，此前为 64 位），便于人工抄录；
+  `xuanarmor reset-token` 生成的新 Token 会自动写回配置文件，重启后保持。
 - 修改 `api_token` / `readonly_token` 后需重启服务生效。
 
 ### 8.3 热加载
@@ -448,6 +474,54 @@ xuanarmor reset-token
 sudo systemctl reload xuanarmor
 sudo kill -HUP $(pidof xuanarmor)
 ```
+
+### 8.4 XDP 模式与内核调优
+
+XuanArmor 支持两种 XDP 挂载方式，**性能相差约 3 倍**：
+
+| 模式 | 执行位置 | 相对性能 |
+|---|---|---|
+| `native`（驱动层） | 网卡驱动 NAPI 上下文，`sk_buff` 分配之前 | 基准 |
+| `generic`（SKB 模式） | `sk_buff` 分配之后，走内核通用 XDP 路径 | 约 native 的 1/3 |
+
+安装脚本会在安装前自动预检并提示；也可以手动判断：
+
+```bash
+ethtool -k eth0 | grep -E 'rx-gro-hw|rx-checksumming'
+```
+
+- 输出 `rx-gro-hw: on [fixed]` → **只能 generic**。宿主机固定实现 GRO_HW/CSUM 后，
+  guest 内无法关闭（`ethtool -K eth0 rx-gro-hw off` 会被拒绝），换实例规格才能解决。
+- 输出 `rx-gro-hw: off` 或不带 `[fixed]` → 可使用 native。
+
+通用模式可用 `xuanarmor tune` 提升吞吐。它会按当前挂载模式自动选择策略，
+并把修改前的原值写入 `<store_path 目录>/tune-state.json`，`--revert` 可完整还原：
+
+```bash
+# 只看调优计划，不修改任何参数
+sudo xuanarmor tune --dry-run
+
+# 执行调优（自动识别 generic / native）
+sudo xuanarmor tune
+
+# JSON 输出，便于编排与巡检
+sudo xuanarmor tune --json
+
+# 还原全部修改（sysctl / RPS / RFS / 中断亲和性）
+sudo xuanarmor tune --revert
+```
+
+| 模式 | 调优项 |
+|---|---|
+| generic | RPS（`rps_cpus` 覆盖全部在线 CPU）、RFS（`rps_flow_cnt`、`net.core.rps_sock_flow_entries`）、NAPI 预算（`netdev_budget` / `netdev_budget_usecs` / `netdev_max_backlog`） |
+| native | 每个 RX 队列的 IRQ 亲和性（`/proc/irq/N/smp_affinity_list`）、NAPI 预算 |
+
+实测（2 vCPU / 单 RX 队列 / generic，4 机并发 UDP Flood）：调优后 dropped pps 从
+**76,442 提升到 87,462（+14.4%）**。队列数与 CPU 核数越多，RPS 的收益越大。
+
+> `tune` 只调整内核收包参数，不改变挂载模式；native / generic 由 `[xdp].mode`
+> 与驱动能力共同决定。详细的调优前后方法与数据见
+> [docs/benchmark.md](docs/benchmark.md)。
 
 ## 9. 分布式 Hub
 
@@ -609,6 +683,7 @@ xuanarmor tui
 | Blacklist hit_count | 1/16 采样写入，单次补 16。 |
 | TOP_ATTACKERS 热榜 | 1/16 采样写入，单次补 16。 |
 | 黑名单命中 RingBuf 事件 | 不再写入，计数由全局统计与 hit_count 覆盖。 |
+| Trust 关闭时（默认） | 完全跳过 `TRUST_MAP` 读写——PASS 不再递增采样计数，DROP 不再读信誉分。 |
 
 详细基准方法与 veth 大包数据见 [docs/benchmark.md](docs/benchmark.md)；
 v0.5.0 的实测单包成本、真实两机攻击数据、内存占用与容量公式见
@@ -625,6 +700,26 @@ v0.5.0 的实测单包成本、真实两机攻击数据、内存占用与容量�
 
 容量估算：`所需核数 ≈ 峰值 pps × 单包成本(75~92ns) / 0.7`（数据面理论下限，另加控制面与业务开销）；
 2 vCPU 建议只承载 ≤150k pps 的已识别攻击，未识别流量建议 ≥4 vCPU + native XDP。
+
+### 11.5 generic 组合攻击实测（v0.5.4）
+
+测试环境：2 vCPU / 3.6 GB / virtio_net **单 RX 队列** / `rx-gro-hw: on [fixed]` → generic；
+4 台 2 vCPU 攻击机内网直连，hping3 多向量并发。
+
+| 场景 | total_packets | dropped | passed |
+|---|---:|---:|---:|
+| SYN Flood（4 机 × 10s） | 546,090 | 174,681 | 12,990 |
+| UDP Flood（4 机 × 10s） | 849,640 | 838,154 | 11,486 |
+| ICMP Flood（4 机 × 10s） | 2,542,342 | 2,533,976 | 8,366 |
+| 混合 SYN+UDP+ICMP（4 机 × 12s） | 954,756 | 786,751 | 10,173 |
+| 全协议混合 + 大包（4 机 × 15s） | 1,244,410 | 1,240,257 | 4,153 |
+| 攻击期间正常 HTTP 请求 | — | — | **20/20 成功，延迟 1.1→1.2 ms** |
+
+累计 20,461,657 包、丢弃 19,108,524（93.4%）；攻击期间服务一直可用，XDP 未掉挂，
+黑名单只命中攻击源（无误杀）。完整数据与评价见 [docs/benchmark.md](docs/benchmark.md)。
+
+> 本节数据反映的是**单队列 + 2 vCPU + generic** 这一受限配置，不代表项目性能上限；
+> 性能承诺请引用 native 基准。
 
 
 ## 12. 测试

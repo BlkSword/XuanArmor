@@ -355,8 +355,13 @@ xuanarmor check --config /etc/xuanarmor/config.toml
 # 启动 TUI
 xuanarmor tui
 
-# 重置 Web 控制台 Token
+# 重置 Web 控制台 Token（12 位十六进制，写回 config.toml）
 xuanarmor reset-token
+
+# 内核收包调优（v0.5.4）：generic 走 RPS/RFS，native 走中断亲和性
+sudo xuanarmor tune --dry-run
+sudo xuanarmor tune
+sudo xuanarmor tune --revert
 ```
 
 ### 7.3 热加载
